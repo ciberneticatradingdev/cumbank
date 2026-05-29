@@ -9,7 +9,7 @@ interface EventRow {
   created_at: Date;
 }
 
-const router = Router();
+const router: Router = Router();
 
 // SSE clients
 const sseClients = new Set<Response>();

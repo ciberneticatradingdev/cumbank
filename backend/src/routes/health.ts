@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { getSchedulerState } from '../services/scheduler';
 import { config } from '../config';
 
-const router = Router();
+const router: Router = Router();
 const startTime = Date.now();
 
 router.get('/health', (_req: Request, res: Response) => {

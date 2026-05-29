@@ -12,7 +12,7 @@ interface EarningsRow {
   total_earned: string;
 }
 
-const router = Router();
+const router: Router = Router();
 
 router.get('/holders', async (_req: Request, res: Response) => {
   try {

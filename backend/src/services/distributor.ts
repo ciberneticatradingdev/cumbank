@@ -1,9 +1,16 @@
 import { PublicKey, SystemProgram } from '@solana/web3.js';
+import {
+  getAssociatedTokenAddressSync,
+  createAssociatedTokenAccountIdempotentInstruction,
+  createTransferInstruction,
+  TOKEN_PROGRAM_ID,
+} from '@solana/spl-token';
 import { config } from '../config';
 import { pool } from '../db/pool';
 import { logger } from '../utils/logger';
 import { getConnection, sendTransactionWithRetry } from '../utils/solana';
 import { HolderInfo } from './snapshot';
+import { parseTokenAmountToRaw, formatTokenAmount } from './swapper';
 
 // Rent-exempt minimum for a 0-byte account (system account)
 const RENT_EXEMPT_MINIMUM = BigInt(890_880); // ~0.00089 SOL
@@ -254,4 +261,270 @@ function formatSolAmount(rawAmount: bigint): string {
   const fraction = rawAmount % BigInt(1_000_000_000);
   const fractionStr = fraction.toString().padStart(9, '0');
   return `${whole}.${fractionStr}`;
+}
+
+// ── SPL Token ($CUM) distribution ────────────────────────────────────────────
+
+// SPL transfers use smaller batches to stay within Solana's transaction size limit
+// (each holder needs 2 instructions: createATA + transfer)
+const TOKEN_BATCH_SIZE = 5;
+
+interface TokenPaymentInfo {
+  wallet: string;
+  amountTokens: string;
+  amountRaw: bigint;
+  tokenBalance: string;
+  percentage: string;
+}
+
+/**
+ * Distribute $CUM tokens to all snapshot holders (instant 50% pool).
+ * Records are written to the existing distributions / distribution_payments tables.
+ */
+export async function distributeCum(
+  claimRoundId: number,
+  snapshotId: number,
+  holders: HolderInfo[],
+  totalAmountTokens: string,
+  totalSupply: string
+): Promise<DistributionResult> {
+  logger.info('Starting $CUM distribution (instant)', {
+    claimRoundId,
+    snapshotId,
+    holderCount: holders.length,
+    totalAmountTokens,
+  });
+
+  const distResult = await pool.query<{ id: number }>(
+    `INSERT INTO distributions (claim_round_id, snapshot_id, total_amount_usdc, holder_count, status)
+     VALUES ($1, $2, $3, $4, 'distributing') RETURNING id`,
+    [claimRoundId, snapshotId, totalAmountTokens, holders.length]
+  );
+  const distributionId = distResult.rows[0].id;
+
+  await logEvent('distribution_started', `$CUM Distribution #${distributionId} started`, {
+    distributionId,
+    claimRoundId,
+    totalAmountTokens,
+    holderCount: holders.length,
+  });
+
+  const totalRaw = parseTokenAmountToRaw(totalAmountTokens);
+  const totalSupplyNum = parseFloat(totalSupply);
+  const payments: TokenPaymentInfo[] = [];
+
+  for (const holder of holders) {
+    const share = parseFloat(holder.tokenBalance) / totalSupplyNum;
+    const amountRaw = BigInt(Math.floor(Number(totalRaw) * share));
+    if (amountRaw < BigInt(1)) continue;
+
+    payments.push({
+      wallet: holder.wallet,
+      amountTokens: formatTokenAmount(amountRaw),
+      amountRaw,
+      tokenBalance: holder.tokenBalance,
+      percentage: holder.percentage,
+    });
+  }
+
+  // Insert pending payment records
+  for (const p of payments) {
+    await pool.query(
+      `INSERT INTO distribution_payments
+       (distribution_id, wallet, amount_usdc, token_balance, percentage, status)
+       VALUES ($1, $2, $3, $4, $5, 'pending')`,
+      [distributionId, p.wallet, p.amountTokens, p.tokenBalance, p.percentage]
+    );
+  }
+
+  const { successCount, failCount } = await sendTokenBatches(
+    payments,
+    distributionId,
+    config.rewardMint,
+    'distribution_payments'
+  );
+
+  const status = failCount === 0 ? 'completed' : successCount === 0 ? 'failed' : 'partial';
+  await pool.query(
+    'UPDATE distributions SET status = $1, completed_at = NOW() WHERE id = $2',
+    [status, distributionId]
+  );
+
+  const totalDistributed = payments.reduce((s, p) => s + p.amountRaw, BigInt(0));
+
+  const result: DistributionResult = {
+    distributionId,
+    totalDistributed: formatTokenAmount(totalDistributed),
+    successCount,
+    failCount,
+    status,
+  };
+
+  await logEvent('distribution_completed', `$CUM Distribution #${distributionId} ${status}`, { ...result });
+  logger.info('$CUM distribution complete', { ...result });
+  return result;
+}
+
+/**
+ * Distribute accumulated $CUM tokens to diamond hands holders only.
+ * Records are written to the diamond_distributions / diamond_payments tables.
+ * Proportions are calculated relative to diamond holders' total balance (not total supply).
+ */
+export async function distributeCumDiamond(
+  diamondDistributionId: number,
+  holders: HolderInfo[],
+  totalAmountTokens: string
+): Promise<DistributionResult> {
+  logger.info('Starting $CUM distribution (diamond hands)', {
+    diamondDistributionId,
+    holderCount: holders.length,
+    totalAmountTokens,
+  });
+
+  const totalRaw = parseTokenAmountToRaw(totalAmountTokens);
+  // Use diamond holders' combined balance as the denominator
+  const diamondTotal = holders.reduce((s, h) => s + parseFloat(h.tokenBalance), 0);
+  const payments: TokenPaymentInfo[] = [];
+
+  for (const holder of holders) {
+    const share = parseFloat(holder.tokenBalance) / diamondTotal;
+    const amountRaw = BigInt(Math.floor(Number(totalRaw) * share));
+    if (amountRaw < BigInt(1)) continue;
+
+    payments.push({
+      wallet: holder.wallet,
+      amountTokens: formatTokenAmount(amountRaw),
+      amountRaw,
+      tokenBalance: holder.tokenBalance,
+      percentage: ((share) * 100).toFixed(6),
+    });
+  }
+
+  for (const p of payments) {
+    await pool.query(
+      `INSERT INTO diamond_payments
+       (distribution_id, wallet, amount_tokens, token_balance, percentage, status)
+       VALUES ($1, $2, $3, $4, $5, 'pending')`,
+      [diamondDistributionId, p.wallet, p.amountTokens, p.tokenBalance, p.percentage]
+    );
+  }
+
+  const { successCount, failCount } = await sendTokenBatches(
+    payments,
+    diamondDistributionId,
+    config.rewardMint,
+    'diamond_payments'
+  );
+
+  const status = failCount === 0 ? 'completed' : successCount === 0 ? 'failed' : 'partial';
+  await pool.query(
+    'UPDATE diamond_distributions SET status = $1, completed_at = NOW() WHERE id = $2',
+    [status, diamondDistributionId]
+  );
+
+  const totalDistributed = payments.reduce((s, p) => s + p.amountRaw, BigInt(0));
+
+  const result: DistributionResult = {
+    distributionId: diamondDistributionId,
+    totalDistributed: formatTokenAmount(totalDistributed),
+    successCount,
+    failCount,
+    status,
+  };
+
+  await logEvent('diamond_distribution_completed', `Diamond Distribution #${diamondDistributionId} ${status}`, { ...result });
+  logger.info('Diamond hands distribution complete', { ...result });
+  return result;
+}
+
+/**
+ * Send $CUM token transfers in small batches.
+ * Each batch: createATA (idempotent) + transfer for each holder.
+ */
+async function sendTokenBatches(
+  payments: TokenPaymentInfo[],
+  distributionId: number,
+  mint: PublicKey,
+  paymentsTable: string
+): Promise<{ successCount: number; failCount: number }> {
+  let successCount = 0;
+  let failCount = 0;
+  const sourceAta = getAssociatedTokenAddressSync(mint, config.walletPublicKey);
+  const batches = chunkArray(payments, TOKEN_BATCH_SIZE);
+
+  for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+    const batch = batches[batchIdx];
+    logger.info(`Token batch ${batchIdx + 1}/${batches.length} (${batch.length} payments)`);
+
+    try {
+      const instructions = [];
+
+      for (const payment of batch) {
+        const destAta = getAssociatedTokenAddressSync(mint, new PublicKey(payment.wallet));
+
+        // Create ATA for recipient if it doesn't exist yet
+        instructions.push(
+          createAssociatedTokenAccountIdempotentInstruction(
+            config.walletPublicKey,
+            destAta,
+            new PublicKey(payment.wallet),
+            mint
+          )
+        );
+
+        instructions.push(
+          createTransferInstruction(
+            sourceAta,
+            destAta,
+            config.walletPublicKey,
+            payment.amountRaw,
+            [],
+            TOKEN_PROGRAM_ID
+          )
+        );
+      }
+
+      const txResult = await sendTransactionWithRetry(instructions, [config.walletKeypair], 3);
+
+      for (const payment of batch) {
+        await pool.query(
+          `UPDATE ${paymentsTable}
+           SET status = 'confirmed', tx_signature = $1, sent_at = NOW()
+           WHERE distribution_id = $2 AND wallet = $3 AND status = 'pending'`,
+          [txResult.signature, distributionId, payment.wallet]
+        );
+        successCount++;
+      }
+
+      await logEvent('payment_sent', `Token batch ${batchIdx + 1} sent (${batch.length} payments)`, {
+        distributionId,
+        batchIndex: batchIdx,
+        txSignature: txResult.signature,
+        paymentCount: batch.length,
+        table: paymentsTable,
+      });
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      logger.error(`Token batch ${batchIdx + 1} failed`, { error: errorMessage });
+
+      for (const payment of batch) {
+        await pool.query(
+          `UPDATE ${paymentsTable}
+           SET status = 'failed', error_message = $1
+           WHERE distribution_id = $2 AND wallet = $3 AND status = 'pending'`,
+          [errorMessage, distributionId, payment.wallet]
+        );
+        failCount++;
+      }
+
+      await logEvent('payment_failed', `Token batch ${batchIdx + 1} failed: ${errorMessage}`, {
+        distributionId,
+        batchIndex: batchIdx,
+        error: errorMessage,
+        table: paymentsTable,
+      });
+    }
+  }
+
+  return { successCount, failCount };
 }

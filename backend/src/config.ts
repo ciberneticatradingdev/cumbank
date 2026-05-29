@@ -24,6 +24,7 @@ export interface Config {
   walletKeypair: Keypair;
   walletPublicKey: PublicKey;
   tokenMint: PublicKey;
+  rewardMint: PublicKey;
   databaseUrl: string;
   solanaRpcUrl: string;
   wsolMint: PublicKey;
@@ -35,6 +36,7 @@ export interface Config {
   batchSize: number;
   port: number;
   minClaimSol: number;
+  diamondHandsMs: number;
 }
 
 function loadConfig(): Config {
@@ -58,6 +60,8 @@ function loadConfig(): Config {
     batchSize: parseInt(optionalEnv('BATCH_SIZE', '10'), 10),
     port: parseInt(optionalEnv('PORT', '4000'), 10),
     minClaimSol: parseFloat(optionalEnv('MIN_CLAIM_SOL', '0.0001')),
+    rewardMint: new PublicKey(optionalEnv('REWARD_MINT', 'oqU4DdYCbdSf9j74vnEgvCn1YzNfYQEPWaC6pu6pump')),
+    diamondHandsMs: parseInt(optionalEnv('DIAMOND_HANDS_MS', '3600000'), 10),
   };
 }
 

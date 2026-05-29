@@ -76,6 +76,55 @@ const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
   `,
+
+  // Version 2: Diamond hands system + token distribution tables
+  `
+  CREATE TABLE IF NOT EXISTS holder_tracking (
+    wallet TEXT PRIMARY KEY,
+    first_seen TIMESTAMPTZ NOT NULL,
+    last_balance NUMERIC(30, 6) NOT NULL,
+    balance_decreased_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS diamond_distributions (
+    id SERIAL PRIMARY KEY,
+    snapshot_id INTEGER REFERENCES snapshots(id),
+    total_amount_tokens NUMERIC(20, 6) NOT NULL,
+    holder_count INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    completed_at TIMESTAMPTZ
+  );
+
+  CREATE TABLE IF NOT EXISTS diamond_payments (
+    id SERIAL PRIMARY KEY,
+    distribution_id INTEGER REFERENCES diamond_distributions(id),
+    wallet TEXT NOT NULL,
+    amount_tokens NUMERIC(20, 6) NOT NULL,
+    token_balance NUMERIC(30, 6) NOT NULL,
+    percentage NUMERIC(10, 6) NOT NULL,
+    tx_signature TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    error_message TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    sent_at TIMESTAMPTZ
+  );
+
+  CREATE TABLE IF NOT EXISTS accumulated_pool (
+    id SERIAL PRIMARY KEY,
+    amount_tokens NUMERIC(20, 6) NOT NULL,
+    pending BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_holder_tracking_wallet ON holder_tracking(wallet);
+  CREATE INDEX IF NOT EXISTS idx_diamond_distributions_created ON diamond_distributions(created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_diamond_payments_wallet ON diamond_payments(wallet);
+  CREATE INDEX IF NOT EXISTS idx_diamond_payments_dist_id ON diamond_payments(distribution_id);
+  CREATE INDEX IF NOT EXISTS idx_accumulated_pool_pending ON accumulated_pool(pending);
+  `,
 ];
 
 export async function runMigrations(): Promise<void> {

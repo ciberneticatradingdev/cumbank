@@ -24,7 +24,7 @@ interface PaymentRow {
   sent_at: Date | null;
 }
 
-const router = Router();
+const router: Router = Router();
 
 router.get('/distributions', async (req: Request, res: Response) => {
   try {

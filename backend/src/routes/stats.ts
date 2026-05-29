@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { pool } from '../db/pool';
 import { config } from '../config';
 
-const router = Router();
+const router: Router = Router();
 
 router.get('/stats', async (_req: Request, res: Response) => {
   try {
