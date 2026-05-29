@@ -6,7 +6,7 @@
 export const config = {
   tokenName: process.env.NEXT_PUBLIC_TOKEN_NAME || "$CUMBANK",
   tokenCA: process.env.NEXT_PUBLIC_TOKEN_CA || "",
-  apiUrl: process.env.NEXT_PUBLIC_API_URL || "https://cumbank-backend.up.railway.app",
+  apiUrl: process.env.NEXT_PUBLIC_API_URL || "https://backend-production-5033.up.railway.app",
   twitterUrl: process.env.NEXT_PUBLIC_TWITTER_URL || "",
   tokenDescription:
     process.env.NEXT_PUBLIC_TOKEN_DESCRIPTION ||
