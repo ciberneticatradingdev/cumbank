@@ -4,6 +4,7 @@ import {
   createAssociatedTokenAccountIdempotentInstruction,
   createTransferInstruction,
   TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
 } from '@solana/spl-token';
 import { config } from '../config';
 import { pool } from '../db/pool';
@@ -449,7 +450,10 @@ async function sendTokenBatches(
 ): Promise<{ successCount: number; failCount: number }> {
   let successCount = 0;
   let failCount = 0;
-  const sourceAta = getAssociatedTokenAddressSync(mint, config.walletPublicKey);
+  // Determine if mint uses Token-2022 (pump.fun tokens do)
+  const isToken2022 = mint.equals(config.rewardMint);
+  const tokenProgram = isToken2022 ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
+  const sourceAta = getAssociatedTokenAddressSync(mint, config.walletPublicKey, false, tokenProgram);
   const batches = chunkArray(payments, TOKEN_BATCH_SIZE);
 
   for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
@@ -460,7 +464,7 @@ async function sendTokenBatches(
       const instructions = [];
 
       for (const payment of batch) {
-        const destAta = getAssociatedTokenAddressSync(mint, new PublicKey(payment.wallet));
+        const destAta = getAssociatedTokenAddressSync(mint, new PublicKey(payment.wallet), false, tokenProgram);
 
         // Create ATA for recipient if it doesn't exist yet
         instructions.push(
@@ -468,7 +472,8 @@ async function sendTokenBatches(
             config.walletPublicKey,
             destAta,
             new PublicKey(payment.wallet),
-            mint
+            mint,
+            tokenProgram
           )
         );
 
@@ -479,7 +484,7 @@ async function sendTokenBatches(
             config.walletPublicKey,
             payment.amountRaw,
             [],
-            TOKEN_PROGRAM_ID
+            tokenProgram
           )
         );
       }

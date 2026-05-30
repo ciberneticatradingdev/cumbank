@@ -10,6 +10,7 @@ import {
   createSyncNativeInstruction,
   createCloseAccountInstruction,
   TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
 } from '@solana/spl-token';
 import { config } from '../config';
@@ -76,7 +77,7 @@ async function getPoolAddress(): Promise<PublicKey> {
 // Derive PDAs needed for the swap
 function derivePoolTokenAccounts(poolAddress: PublicKey) {
   // Pool's token accounts are ATAs owned by the pool (allowOwnerOffCurve=true)
-  const poolBaseAta = getAssociatedTokenAddressSync(config.rewardMint, poolAddress, true);
+  const poolBaseAta = getAssociatedTokenAddressSync(config.rewardMint, poolAddress, true, TOKEN_2022_PROGRAM_ID);
   const poolQuoteAta = getAssociatedTokenAddressSync(config.wsolMint, poolAddress, true);
   return { poolBaseAta, poolQuoteAta };
 }
@@ -121,7 +122,7 @@ function buildBuyExactQuoteIn(
   minBaseOut: bigint,       // minimum $CUM tokens to receive (0 = no slippage protection)
   coinCreator: PublicKey,
 ): TransactionInstruction {
-  const userBaseAta = getAssociatedTokenAddressSync(config.rewardMint, config.walletPublicKey);
+  const userBaseAta = getAssociatedTokenAddressSync(config.rewardMint, config.walletPublicKey, false, TOKEN_2022_PROGRAM_ID);
   const userQuoteAta = getAssociatedTokenAddressSync(config.wsolMint, config.walletPublicKey);
   const { poolBaseAta, poolQuoteAta } = derivePoolTokenAccounts(poolAddress);
   
@@ -155,8 +156,8 @@ function buildBuyExactQuoteIn(
       { pubkey: poolQuoteAta, isSigner: false, isWritable: true },                   // pool_quote_token_account
       { pubkey: protocolFeeRecipient, isSigner: false, isWritable: false },          // protocol_fee_recipient
       { pubkey: protocolFeeQuoteAta, isSigner: false, isWritable: true },            // protocol_fee_recipient_token_account
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },              // base_token_program
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },              // quote_token_program
+      { pubkey: TOKEN_2022_PROGRAM_ID, isSigner: false, isWritable: false },          // base_token_program ($CUM = Token-2022)
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },              // quote_token_program (WSOL = Token Program)
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },       // system_program
       { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },   // associated_token_program
       { pubkey: EVENT_AUTHORITY, isSigner: false, isWritable: false },               // event_authority
@@ -206,7 +207,7 @@ export async function swapSolForCum(amountSol: string): Promise<SwapResult | nul
     }
 
     const userWsolAta = getAssociatedTokenAddressSync(config.wsolMint, config.walletPublicKey);
-    const userCumAta = getAssociatedTokenAddressSync(config.rewardMint, config.walletPublicKey);
+    const userCumAta = getAssociatedTokenAddressSync(config.rewardMint, config.walletPublicKey, false, TOKEN_2022_PROGRAM_ID);
 
     // Read $CUM balance before swap
     const cumBefore = await getCumBalance(connection, userCumAta);
@@ -226,7 +227,7 @@ export async function swapSolForCum(amountSol: string): Promise<SwapResult | nul
       createSyncNativeInstruction(userWsolAta),
       // 4. Create $CUM ATA (idempotent)
       createAssociatedTokenAccountIdempotentInstruction(
-        config.walletPublicKey, userCumAta, config.walletPublicKey, config.rewardMint
+        config.walletPublicKey, userCumAta, config.walletPublicKey, config.rewardMint, TOKEN_2022_PROGRAM_ID
       ),
       // 5. Buy $CUM with WSOL via PumpAMM buy_exact_quote_in
       buildBuyExactQuoteIn(poolAddress, lamports, BigInt(0), coinCreator),
