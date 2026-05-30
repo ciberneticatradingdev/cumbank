@@ -125,20 +125,17 @@ async function getPoolInfo(): Promise<PoolInfo> {
 
   // Step 3: Read protocol_fee_recipient from global config
   // Layout: disc(8) + admin(32) + lp_fee(8) + proto_fee(8) + flags(1) + recipients([Pubkey;8])
+  // The protocol uses one active recipient from the array.
+  // We select recipient[4] which matches current pump.fun production swaps.
+  // If this stops working, check recent successful PumpAMM swaps for the active recipient.
   const globalConfigInfo = await connection.getAccountInfo(GLOBAL_CONFIG);
   if (!globalConfigInfo) throw new Error('Global config not found on-chain');
 
-  let protocolFeeRecipient: PublicKey | null = null;
   const gcData = globalConfigInfo.data;
-  for (let i = 0; i < 8; i++) {
-    const offset = 57 + i * 32;
-    if (offset + 32 > gcData.length) break;
-    const pkBytes = gcData.slice(offset, offset + 32);
-    if (!pkBytes.every((b: number) => b === 0)) {
-      protocolFeeRecipient = new PublicKey(pkBytes);
-    }
-  }
-  if (!protocolFeeRecipient) throw new Error('No protocol fee recipient in global config');
+  const recipientIndex = 4; // Current active recipient index in pump.fun production
+  const recipientOffset = 57 + recipientIndex * 32;
+  if (recipientOffset + 32 > gcData.length) throw new Error('Global config too short for recipient');
+  const protocolFeeRecipient = new PublicKey(gcData.slice(recipientOffset, recipientOffset + 32));
 
   cachedPool = {
     address: poolAddress,
@@ -243,7 +240,7 @@ function buildBuyInstruction(
   const { vaultAuthority, vaultAta } = deriveCoinCreatorVault(poolInfo.coinCreator);
   const userVolumeAccumulator = deriveUserVolumeAccumulator(config.walletPublicKey);
 
-  // Data: discriminator(8) + base_amount_out(u64) + max_quote_amount_in(u64) + track_volume(1 byte = Some(true))
+  // Data: discriminator(8) + base_amount_out(u64) + max_quote_amount_in(u64) + track_volume(1 byte)
   const data = Buffer.alloc(25);
   BUY_DISCRIMINATOR.copy(data, 0);
   data.writeBigUInt64LE(baseAmountOut, 8);
