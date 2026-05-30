@@ -64,7 +64,7 @@ export async function swapSolForCum(amountSol: string): Promise<SwapResult | nul
     const quoteUrl = `${JUPITER_QUOTE_URL}?inputMint=${WSOL_MINT}&outputMint=${CUM_MINT}&amount=${lamports.toString()}&slippageBps=500`;
     const quoteResp = await fetch(quoteUrl, {
       headers: { 'Accept': 'application/json' },
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(30_000),
     });
 
     if (!quoteResp.ok) {
@@ -89,7 +89,7 @@ export async function swapSolForCum(amountSol: string): Promise<SwapResult | nul
     const swapResp = await fetch(JUPITER_SWAP_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(30_000),
       body: JSON.stringify({
         quoteResponse: quote,
         userPublicKey: config.walletPublicKey.toBase58(),
