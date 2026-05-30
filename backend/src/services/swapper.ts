@@ -188,6 +188,45 @@ function deriveUserVolumeAccumulator(user: PublicKey) {
 // ── Build buy instruction ────────────────────────────────────────────────────
 // Pump AMM "buy" instruction: 23 accounts
 // Receives base tokens (e.g. $CUM), paying with quote tokens (e.g. WSOL)
+// Args: base_amount_out (min tokens to receive), max_quote_amount_in (max WSOL to spend)
+// IMPORTANT: base_amount_out MUST be > 0 or the program rejects with ZeroBaseAmount (6001)
+
+async function calculateExpectedOutput(
+  connection: Connection,
+  poolInfo: PoolInfo,
+  quoteAmountIn: bigint,
+): Promise<bigint> {
+  // Read pool vault balances to calculate expected output
+  const [baseBalance, quoteBalance] = await Promise.all([
+    connection.getTokenAccountBalance(poolInfo.poolBaseTokenAccount, 'confirmed'),
+    connection.getTokenAccountBalance(poolInfo.poolQuoteTokenAccount, 'confirmed'),
+  ]);
+
+  const baseReserve = BigInt(baseBalance.value.amount);
+  const quoteReserve = BigInt(quoteBalance.value.amount);
+
+  if (baseReserve <= BigInt(0) || quoteReserve <= BigInt(0)) {
+    throw new Error('Pool has zero reserves');
+  }
+
+  // Constant product: amount_out = (base_reserve * amount_in_after_fee) / (quote_reserve + amount_in_after_fee)
+  // Fee: lp_fee = 20 bps, protocol_fee = 5 bps = 25 bps total
+  const totalFeeBps = BigInt(25);
+  const fee = (quoteAmountIn * totalFeeBps) / BigInt(10000);
+  const amountInAfterFee = quoteAmountIn - fee;
+
+  const amountOut = (baseReserve * amountInAfterFee) / (quoteReserve + amountInAfterFee);
+
+  logger.info('Swap calculation', {
+    baseReserve: baseReserve.toString(),
+    quoteReserve: quoteReserve.toString(),
+    quoteIn: quoteAmountIn.toString(),
+    fee: fee.toString(),
+    expectedOut: amountOut.toString(),
+  });
+
+  return amountOut;
+}
 
 function buildBuyInstruction(
   poolInfo: PoolInfo,
@@ -276,28 +315,43 @@ export async function swapSolForCum(amountSol: string): Promise<SwapResult | nul
     // Read $CUM balance before swap
     const cumBefore = await getCumBalance(connection, userCumAta);
 
-    const instructions: TransactionInstruction[] = [
-      // 1. Create WSOL ATA (idempotent)
-      createAssociatedTokenAccountIdempotentInstruction(
-        config.walletPublicKey, userWsolAta, config.walletPublicKey, config.wsolMint
-      ),
-      // 2. Move native SOL into the WSOL ATA
-      SystemProgram.transfer({
-        fromPubkey: config.walletPublicKey,
-        toPubkey: userWsolAta,
-        lamports,
-      }),
-      // 3. Sync so the token balance reflects the deposited lamports
-      createSyncNativeInstruction(userWsolAta),
-      // 4. Create $CUM ATA (idempotent, Token-2022)
-      createAssociatedTokenAccountIdempotentInstruction(
-        config.walletPublicKey, userCumAta, config.walletPublicKey, config.rewardMint, TOKEN_2022_PROGRAM_ID
-      ),
-      // 5. Buy $CUM via PumpAMM buy instruction (baseAmountOut=0 = no min, maxQuoteIn=lamports)
-      buildBuyInstruction(poolInfo, BigInt(0), lamports),
-      // 6. Close WSOL ATA — returns any unspent WSOL as native SOL
-      createCloseAccountInstruction(userWsolAta, config.walletPublicKey, config.walletPublicKey),
-    ];
+      // 5. Calculate expected output and buy $CUM via PumpAMM
+      const expectedTokens = await calculateExpectedOutput(connection, poolInfo, lamports);
+      if (expectedTokens <= BigInt(0)) {
+        logger.warn('Expected 0 tokens from swap, skipping');
+        return null;
+      }
+      // Use 50% slippage tolerance (small amounts, low liquidity)
+      const minTokensOut = expectedTokens / BigInt(2);
+
+      logger.info('Swap params', {
+        lamportsIn: lamports.toString(),
+        expectedTokens: expectedTokens.toString(),
+        minTokensOut: minTokensOut.toString(),
+      });
+
+      const instructions: TransactionInstruction[] = [
+        // 1. Create WSOL ATA (idempotent)
+        createAssociatedTokenAccountIdempotentInstruction(
+          config.walletPublicKey, userWsolAta, config.walletPublicKey, config.wsolMint
+        ),
+        // 2. Move native SOL into the WSOL ATA
+        SystemProgram.transfer({
+          fromPubkey: config.walletPublicKey,
+          toPubkey: userWsolAta,
+          lamports,
+        }),
+        // 3. Sync so the token balance reflects the deposited lamports
+        createSyncNativeInstruction(userWsolAta),
+        // 4. Create $CUM ATA (idempotent, Token-2022)
+        createAssociatedTokenAccountIdempotentInstruction(
+          config.walletPublicKey, userCumAta, config.walletPublicKey, config.rewardMint, TOKEN_2022_PROGRAM_ID
+        ),
+        // 5. Buy $CUM via PumpAMM (minTokensOut, maxSolIn=lamports)
+        buildBuyInstruction(poolInfo, minTokensOut, lamports),
+        // 6. Close WSOL ATA — returns any unspent WSOL as native SOL
+        createCloseAccountInstruction(userWsolAta, config.walletPublicKey, config.walletPublicKey),
+      ];
 
     const result = await sendTransactionWithRetry(instructions, [config.walletKeypair], 3);
 
