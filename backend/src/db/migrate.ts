@@ -125,6 +125,14 @@ const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_diamond_payments_dist_id ON diamond_payments(distribution_id);
   CREATE INDEX IF NOT EXISTS idx_accumulated_pool_pending ON accumulated_pool(pending);
   `,
+
+  // Version 3: Fix stuck 'distributing' rows from pre-ATA-check era
+  `
+  UPDATE distributions SET status = 'failed', completed_at = NOW()
+    WHERE status = 'distributing';
+  UPDATE diamond_distributions SET status = 'failed', completed_at = NOW()
+    WHERE status = 'distributing';
+  `,
 ];
 
 export async function runMigrations(): Promise<void> {

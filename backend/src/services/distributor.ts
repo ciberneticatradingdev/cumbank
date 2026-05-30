@@ -338,12 +338,23 @@ export async function distributeCum(
     );
   }
 
-  const { successCount, failCount } = await sendTokenBatches(
-    payments,
-    distributionId,
-    config.rewardMint,
-    'distribution_payments'
-  );
+  let successCount = 0;
+  let failCount = 0;
+
+  try {
+    const result = await sendTokenBatches(
+      payments,
+      distributionId,
+      config.rewardMint,
+      'distribution_payments'
+    );
+    successCount = result.successCount;
+    failCount = result.failCount;
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    logger.error('sendTokenBatches crashed', { distributionId, error: errorMessage });
+    failCount = payments.length;
+  }
 
   const status = failCount === 0 ? 'completed' : successCount === 0 ? 'failed' : 'partial';
   await pool.query(
@@ -410,12 +421,23 @@ export async function distributeCumDiamond(
     );
   }
 
-  const { successCount, failCount } = await sendTokenBatches(
-    payments,
-    diamondDistributionId,
-    config.rewardMint,
-    'diamond_payments'
-  );
+  let successCount = 0;
+  let failCount = 0;
+
+  try {
+    const result = await sendTokenBatches(
+      payments,
+      diamondDistributionId,
+      config.rewardMint,
+      'diamond_payments'
+    );
+    successCount = result.successCount;
+    failCount = result.failCount;
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    logger.error('sendTokenBatches crashed (diamond)', { diamondDistributionId, error: errorMessage });
+    failCount = payments.length;
+  }
 
   const status = failCount === 0 ? 'completed' : successCount === 0 ? 'failed' : 'partial';
   await pool.query(
