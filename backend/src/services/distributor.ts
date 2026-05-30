@@ -351,8 +351,9 @@ export async function distributeCum(
     successCount = result.successCount;
     failCount = result.failCount;
   } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    logger.error('sendTokenBatches crashed', { distributionId, error: errorMessage });
+    const errorMessage = err instanceof Error ? err.message : (typeof err === 'object' ? JSON.stringify(err) : String(err));
+    const errorStack = err instanceof Error ? err.stack : undefined;
+    logger.error('sendTokenBatches crashed', { distributionId, error: errorMessage, stack: errorStack, errType: typeof err });
     failCount = payments.length;
   }
 
@@ -494,14 +495,22 @@ async function sendTokenBatches(
   const ataKeys = wallets.map(w => ataMap.get(w)!);
   const existingATAs = new Set<string>();
 
-  for (let i = 0; i < ataKeys.length; i += 100) {
-    const slice = ataKeys.slice(i, i + 100);
-    const infos = await connection.getMultipleAccountsInfo(slice);
-    for (let j = 0; j < infos.length; j++) {
-      if (infos[j] !== null) {
-        existingATAs.add(wallets[i + j]);
+  try {
+    for (let i = 0; i < ataKeys.length; i += 100) {
+      const slice = ataKeys.slice(i, i + 100);
+      const infos = await connection.getMultipleAccountsInfo(slice);
+      for (let j = 0; j < infos.length; j++) {
+        if (infos[j] !== null) {
+          existingATAs.add(wallets[i + j]);
+        }
       }
     }
+  } catch (err) {
+    // If RPC fails to check ATAs, log and return empty — don't crash distribution
+    const msg = err instanceof Error ? err.message : JSON.stringify(err);
+    logger.error('Failed to check ATAs via getMultipleAccountsInfo, skipping ATA filter', { error: msg });
+    // Treat all as existing — will fail individually at transfer time
+    for (const w of wallets) existingATAs.add(w);
   }
 
   // Split into eligible (has ATA) and skipped (no ATA)
