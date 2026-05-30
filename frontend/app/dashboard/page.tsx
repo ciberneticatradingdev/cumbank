@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import React, { useState, useEffect, useCallback } from "react"
 import {
   Home,
   LayoutDashboard,
@@ -92,11 +92,23 @@ interface ApiDistributionDetail {
 
 interface ApiDiamondDistribution {
   id: number
+  snapshotId: number | null
   totalAmountTokens: string
   holderCount: number
   status: string
   createdAt: string
   completedAt: string | null
+}
+
+interface ApiDiamondPayment {
+  wallet: string
+  amountTokens: string
+  tokenBalance: string | number
+  percentage: string | number
+  txSignature: string | null
+  status: string
+  errorMessage: string | null
+  sentAt: string | null
 }
 
 interface ApiDiamondData {
@@ -175,6 +187,12 @@ export default function DashboardPage() {
   >({})
   const [diamondData, setDiamondData] = useState<ApiDiamondData | null>(null)
   const [diamondCountdown, setDiamondCountdown] = useState<number>(0)
+
+  // History filter + diamond distributions for history tab
+  type HistoryFilter = "all" | "instant" | "diamond"
+  const [historyFilter, setHistoryFilter] = useState<HistoryFilter>("all")
+  const [diamondDistributions, setDiamondDistributions] = useState<ApiDiamondDistribution[]>([])
+  const [diamondDistDetails, setDiamondDistDetails] = useState<Record<string, { distribution: ApiDiamondDistribution; payments: ApiDiamondPayment[] } | null>>({})
 
   // UI
   const [loading, setLoading]               = useState(true)
@@ -255,6 +273,35 @@ export default function DashboardPage() {
     }
   }, [])
 
+  const fetchDiamondDistributions = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/diamond/distributions?limit=50`)
+      const json = await res.json()
+      setDiamondDistributions(json.distributions ?? [])
+    } catch (err) {
+      console.error("fetchDiamondDist:", err)
+    }
+  }, [])
+
+  const fetchDiamondDistDetail = useCallback(
+    async (id: number) => {
+      const key = `diamond-${id}`
+      if (key in diamondDistDetails) return
+      setLoadingDetail(id)
+      try {
+        const res = await fetch(`${API_BASE}/api/diamond/distributions/${id}`)
+        const json = await res.json()
+        setDiamondDistDetails((prev) => ({ ...prev, [key]: json }))
+      } catch (err) {
+        console.error("fetchDiamondDistDetail:", err)
+        setDiamondDistDetails((prev) => ({ ...prev, [key]: null }))
+      } finally {
+        setLoadingDetail(null)
+      }
+    },
+    [diamondDistDetails]
+  )
+
   // ── Effects ──────────────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -262,6 +309,7 @@ export default function DashboardPage() {
     fetchHolders()
     fetchDistributions(1)
     fetchDiamond()
+    fetchDiamondDistributions()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -271,9 +319,10 @@ export default function DashboardPage() {
       fetchCoreData(true)
       fetchHolders()
       fetchDiamond()
+      fetchDiamondDistributions()
     }, 30_000)
     return () => clearInterval(id)
-  }, [fetchCoreData, fetchHolders, fetchDiamond])
+  }, [fetchCoreData, fetchHolders, fetchDiamond, fetchDiamondDistributions])
 
   // Diamond countdown timer — tick every second
   useEffect(() => {
@@ -300,6 +349,16 @@ export default function DashboardPage() {
     }
   }
 
+  const handleExpandDiamond = (id: number) => {
+    const key = id + 100000 // offset to avoid collision with instant dist ids
+    if (expandedDist === key) {
+      setExpandedDist(null)
+    } else {
+      setExpandedDist(key)
+      fetchDiamondDistDetail(id)
+    }
+  }
+
   const copyWallet = (wallet: string) => {
     navigator.clipboard.writeText(wallet)
     setCopiedWallet(wallet)
@@ -317,6 +376,49 @@ export default function DashboardPage() {
     const end   = Math.min(totalPages, start + 4)
     start        = Math.max(1, end - 4)
     return Array.from({ length: end - start + 1 }, (_, i) => start + i)
+  })()
+
+  // Merged history list for the "all" filter
+  interface MergedDistribution {
+    type: "instant" | "diamond"
+    id: number
+    date: string
+    amount: string
+    holderCount: number
+    status: string
+    expandKey: number // unique key for expand state
+    claimRoundId?: number | null
+    completedAt?: string | null
+  }
+
+  const mergedDistributions: MergedDistribution[] = (() => {
+    const instantItems: MergedDistribution[] = distributions.map((d) => ({
+      type: "instant" as const,
+      id: d.id,
+      date: d.createdAt,
+      amount: d.totalAmountSol,
+      holderCount: d.holderCount,
+      status: d.status,
+      expandKey: d.id,
+      claimRoundId: d.claimRoundId,
+      completedAt: d.completedAt,
+    }))
+    const diamondItems: MergedDistribution[] = diamondDistributions.map((d) => ({
+      type: "diamond" as const,
+      id: d.id,
+      date: d.createdAt,
+      amount: d.totalAmountTokens,
+      holderCount: d.holderCount,
+      status: d.status,
+      expandKey: d.id + 100000,
+      completedAt: d.completedAt,
+    }))
+
+    if (historyFilter === "instant") return instantItems
+    if (historyFilter === "diamond") return diamondItems
+    return [...instantItems, ...diamondItems].sort(
+      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+    )
   })()
 
   // ── Render ────────────────────────────────────────────────────────────────────
@@ -923,16 +1025,29 @@ export default function DashboardPage() {
                     Click a row to expand per-holder payments
                   </p>
                 </div>
-                <span className="text-xs font-bold text-white/40">
-                  {totalDist} distributions
-                </span>
+                <div className="flex items-center gap-1.5">
+                  {(["all", "instant", "diamond"] as const).map((f) => (
+                    <button
+                      key={f}
+                      onClick={() => setHistoryFilter(f)}
+                      className={`px-3 py-1.5 text-xs font-black rounded-lg transition-colors border ${
+                        historyFilter === f
+                          ? "bg-white/10 text-white border-white/20"
+                          : "text-white/40 border-transparent hover:text-white hover:bg-white/5"
+                      }`}
+                    >
+                      {f === "all" ? "ALL" : f === "instant" ? "⚡ INSTANT" : "💎 DIAMOND"}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[640px]">
+                <table className="w-full min-w-[720px]">
                   <thead>
                     <tr className="border-b border-white/10 bg-[#0A0A0A]">
                       <th className="w-10 px-3 py-3" />
+                      <th className="text-left text-xs font-bold text-white/40 px-3 py-3">TYPE</th>
                       <th className="text-left text-xs font-bold text-white/40 px-4 py-3">ID</th>
                       <th className="text-left text-xs font-bold text-white/40 px-4 py-3">DATE</th>
                       <th className="text-right text-xs font-bold text-white/40 px-4 py-3">DISTRIBUTED</th>
@@ -944,41 +1059,56 @@ export default function DashboardPage() {
                     {loadingDist
                       ? Array.from({ length: ITEMS_PER_PAGE }).map((_, i) => (
                           <tr key={i} className="border-b border-white/5">
-                            {Array.from({ length: 6 }).map((_, j) => (
+                            {Array.from({ length: 7 }).map((_, j) => (
                               <td key={j} className="px-4 py-3">
                                 <Sk className="h-4 w-full" />
                               </td>
                             ))}
                           </tr>
                         ))
-                      : distributions.map((dist) => {
-                          const badge = distStatusBadge(dist.status)
+                      : mergedDistributions.map((item) => {
+                          const badge = distStatusBadge(item.status)
+                          const isExpanded = expandedDist === item.expandKey
+                          const isDiamond = item.type === "diamond"
+                          const diamondKey = `diamond-${item.id}`
                           return (
-                            <>
+                            <React.Fragment key={`${item.type}-${item.id}`}>
                               {/* Main row */}
                               <tr
-                                key={dist.id}
                                 className="border-b border-white/5 hover:bg-[#0A0A0A] transition-colors cursor-pointer select-none"
-                                onClick={() => handleExpand(dist.id)}
+                                onClick={() =>
+                                  isDiamond ? handleExpandDiamond(item.id) : handleExpand(item.id)
+                                }
                               >
                                 <td className="px-3 py-3 text-center">
-                                  {expandedDist === dist.id ? (
+                                  {isExpanded ? (
                                     <ChevronUp className="w-4 h-4 text-white/40 mx-auto" />
                                   ) : (
                                     <ChevronDown className="w-4 h-4 text-white/40 mx-auto" />
                                   )}
                                 </td>
+                                <td className="px-3 py-3">
+                                  {isDiamond ? (
+                                    <span className="text-xs font-black px-2 py-0.5 rounded bg-cyan-900/30 text-cyan-400 border border-cyan-500/20">
+                                      💎
+                                    </span>
+                                  ) : (
+                                    <span className="text-xs font-black px-2 py-0.5 rounded bg-white/10 text-white/60 border border-white/10">
+                                      ⚡
+                                    </span>
+                                  )}
+                                </td>
                                 <td className="px-4 py-3 font-mono text-sm text-white font-bold">
-                                  #{dist.id}
+                                  #{item.id}
                                 </td>
                                 <td className="px-4 py-3 text-xs text-white/40">
-                                  {fmtDate(dist.createdAt)}
+                                  {fmtDate(item.date)}
                                 </td>
-                                <td className="px-4 py-3 text-right font-mono text-sm text-white">
-                                  ${fmtSol(dist.totalAmountSol)}
+                                <td className={`px-4 py-3 text-right font-mono text-sm ${isDiamond ? "text-cyan-400" : "text-white"}`}>
+                                  {fmtSol(item.amount)} {isDiamond ? "$CUM" : "$CUM"}
                                 </td>
                                 <td className="px-4 py-3 text-right font-mono text-sm text-white/40">
-                                  {dist.holderCount}
+                                  {item.holderCount}
                                 </td>
                                 <td className="px-4 py-3 text-center">
                                   <span className={`text-xs font-black px-2 py-0.5 rounded ${badge.cls}`}>
@@ -987,134 +1117,220 @@ export default function DashboardPage() {
                                 </td>
                               </tr>
 
-                              {/* Expanded payments row */}
-                              {expandedDist === dist.id && (
-                                <tr key={`${dist.id}-detail`} className="border-b border-white/10">
-                                  <td colSpan={6} className="bg-[#0A0A0A] px-4 py-4">
-                                    {loadingDetail === dist.id ? (
-                                      <div className="flex items-center gap-2 text-white/40 text-sm py-2">
-                                        <Loader2 className="w-4 h-4 animate-spin" />
-                                        Loading payments...
-                                      </div>
-                                    ) : distributionDetails[dist.id] === null ? (
-                                      <p className="text-xs text-red-400">
-                                        Failed to load distribution details.
-                                      </p>
-                                    ) : distributionDetails[dist.id] ? (
-                                      <div>
-                                        {/* Distribution meta */}
-                                        <div className="flex flex-wrap items-center gap-4 mb-3 pb-3 border-b border-white/10">
-                                          {dist.claimRoundId && (
-                                            <span className="text-xs font-bold text-white/40">
-                                              ROUND <span className="text-white">#{dist.claimRoundId}</span>
-                                            </span>
-                                          )}
-                                          {dist.completedAt && (
-                                            <span className="text-xs font-bold text-white/40">
-                                              COMPLETED <span className="text-white">{fmtDate(dist.completedAt)}</span>
-                                            </span>
+                              {/* Expanded payments row — INSTANT */}
+                              {isExpanded && !isDiamond && (() => {
+                                const detail = distributionDetails[item.id]
+                                return (
+                                  <tr key={`instant-${item.id}-detail`} className="border-b border-white/10">
+                                    <td colSpan={7} className="bg-[#0A0A0A] px-4 py-4">
+                                      {loadingDetail === item.id ? (
+                                        <div className="flex items-center gap-2 text-white/40 text-sm py-2">
+                                          <Loader2 className="w-4 h-4 animate-spin" />
+                                          Loading payments...
+                                        </div>
+                                      ) : detail === null ? (
+                                        <p className="text-xs text-red-400">
+                                          Failed to load distribution details.
+                                        </p>
+                                      ) : detail ? (
+                                        <div>
+                                          <div className="flex flex-wrap items-center gap-4 mb-3 pb-3 border-b border-white/10">
+                                            {item.claimRoundId && (
+                                              <span className="text-xs font-bold text-white/40">
+                                                ROUND <span className="text-white">#{item.claimRoundId}</span>
+                                              </span>
+                                            )}
+                                            {item.completedAt && (
+                                              <span className="text-xs font-bold text-white/40">
+                                                COMPLETED <span className="text-white">{fmtDate(item.completedAt)}</span>
+                                              </span>
+                                            )}
+                                          </div>
+                                          {detail.payments.length === 0 ? (
+                                            <p className="text-xs text-white/40">
+                                              No payments recorded for this distribution.
+                                            </p>
+                                          ) : (
+                                            <div className="overflow-x-auto">
+                                              <table className="w-full min-w-[520px]">
+                                                <thead>
+                                                  <tr className="border-b border-white/10">
+                                                    <th className="text-left text-xs font-bold text-white/40 pb-2 pr-4">WALLET</th>
+                                                    <th className="text-right text-xs font-bold text-white/40 pb-2 px-4">AMOUNT ($CUM)</th>
+                                                    <th className="text-right text-xs font-bold text-white/40 pb-2 px-4">SHARE %</th>
+                                                    <th className="text-center text-xs font-bold text-white/40 pb-2 px-4">STATUS</th>
+                                                    <th className="text-right text-xs font-bold text-white/40 pb-2 pl-4">TX</th>
+                                                  </tr>
+                                                </thead>
+                                                <tbody>
+                                                  {detail.payments.map((p: ApiPayment, idx: number) => {
+                                                    const pBadge = distStatusBadge(p.status)
+                                                    return (
+                                                      <tr key={idx} className="border-b border-white/5">
+                                                        <td className="py-2 pr-4">
+                                                          <button
+                                                            onClick={(e) => { e.stopPropagation(); copyWallet(p.wallet) }}
+                                                            className="flex items-center gap-1.5 font-mono text-xs text-white hover:text-white/40 transition-colors"
+                                                          >
+                                                            {truncate(p.wallet)}
+                                                            {copiedWallet === p.wallet ? (
+                                                              <Check className="w-3 h-3 text-emerald-500" />
+                                                            ) : (
+                                                              <Copy className="w-3 h-3 opacity-40" />
+                                                            )}
+                                                          </button>
+                                                        </td>
+                                                        <td className="py-2 px-4 text-right font-mono text-xs text-white">
+                                                          {fmtSol(p.amountSol)}
+                                                        </td>
+                                                        <td className="py-2 px-4 text-right font-mono text-xs text-white/40">
+                                                          {Number(p.percentage).toFixed(4)}%
+                                                        </td>
+                                                        <td className="py-2 px-4 text-center">
+                                                          <span className={`text-xs font-black px-1.5 py-0.5 rounded ${pBadge.cls}`}>
+                                                            {pBadge.label}
+                                                          </span>
+                                                        </td>
+                                                        <td className="py-2 pl-4 text-right">
+                                                          {p.txSignature ? (
+                                                            <a
+                                                              href={`${SOLSCAN_TX}${p.txSignature}`}
+                                                              target="_blank"
+                                                              rel="noopener noreferrer"
+                                                              onClick={(e) => e.stopPropagation()}
+                                                              className="inline-flex items-center gap-1 text-xs font-mono text-white/40 hover:text-white transition-colors"
+                                                            >
+                                                              {truncate(p.txSignature)}
+                                                              <ExternalLink className="w-3 h-3" />
+                                                            </a>
+                                                          ) : (
+                                                            <span className="text-xs text-white/40">—</span>
+                                                          )}
+                                                        </td>
+                                                      </tr>
+                                                    )
+                                                  })}
+                                                </tbody>
+                                              </table>
+                                            </div>
                                           )}
                                         </div>
+                                      ) : null}
+                                    </td>
+                                  </tr>
+                                )
+                              })()}
 
-                                        {/* Payments table */}
-                                        {distributionDetails[dist.id]!.payments.length === 0 ? (
-                                          <p className="text-xs text-white/40">
-                                            No payments recorded for this distribution.
-                                          </p>
-                                        ) : (
-                                          <div className="overflow-x-auto">
-                                            <table className="w-full min-w-[520px]">
-                                              <thead>
-                                                <tr className="border-b border-white/10">
-                                                  <th className="text-left text-xs font-bold text-white/40 pb-2 pr-4">
-                                                    WALLET
-                                                  </th>
-                                                  <th className="text-right text-xs font-bold text-white/40 pb-2 px-4">
-                                                    AMOUNT ($CUM)
-                                                  </th>
-                                                  <th className="text-right text-xs font-bold text-white/40 pb-2 px-4">
-                                                    SHARE %
-                                                  </th>
-                                                  <th className="text-center text-xs font-bold text-white/40 pb-2 px-4">
-                                                    STATUS
-                                                  </th>
-                                                  <th className="text-right text-xs font-bold text-white/40 pb-2 pl-4">
-                                                    TX
-                                                  </th>
-                                                </tr>
-                                              </thead>
-                                              <tbody>
-                                                {distributionDetails[dist.id]!.payments.map((p, idx) => {
-                                                  const pBadge = distStatusBadge(p.status)
-                                                  return (
-                                                    <tr
-                                                      key={idx}
-                                                      className="border-b border-white/5"
-                                                    >
-                                                      <td className="py-2 pr-4">
-                                                        <button
-                                                          onClick={(e) => {
-                                                            e.stopPropagation()
-                                                            copyWallet(p.wallet)
-                                                          }}
-                                                          className="flex items-center gap-1.5 font-mono text-xs text-white hover:text-white/40 transition-colors"
-                                                        >
-                                                          {truncate(p.wallet)}
-                                                          {copiedWallet === p.wallet ? (
-                                                            <Check className="w-3 h-3 text-emerald-500" />
-                                                          ) : (
-                                                            <Copy className="w-3 h-3 opacity-40" />
-                                                          )}
-                                                        </button>
-                                                      </td>
-                                                      <td className="py-2 px-4 text-right font-mono text-xs text-white">
-                                                        ${fmtSol(p.amountSol)}
-                                                      </td>
-                                                      <td className="py-2 px-4 text-right font-mono text-xs text-white/40">
-                                                        {Number(p.percentage).toFixed(4)}%
-                                                      </td>
-                                                      <td className="py-2 px-4 text-center">
-                                                        <span className={`text-xs font-black px-1.5 py-0.5 rounded ${pBadge.cls}`}>
-                                                          {pBadge.label}
-                                                        </span>
-                                                      </td>
-                                                      <td className="py-2 pl-4 text-right">
-                                                        {p.txSignature ? (
-                                                          <a
-                                                            href={`${SOLSCAN_TX}${p.txSignature}`}
-                                                            target="_blank"
-                                                            rel="noopener noreferrer"
-                                                            onClick={(e) => e.stopPropagation()}
-                                                            className="inline-flex items-center gap-1 text-xs font-mono text-white/40 hover:text-white transition-colors"
-                                                          >
-                                                            {truncate(p.txSignature)}
-                                                            <ExternalLink className="w-3 h-3" />
-                                                          </a>
-                                                        ) : (
-                                                          <span className="text-xs text-white/40">—</span>
-                                                        )}
-                                                      </td>
-                                                    </tr>
-                                                  )
-                                                })}
-                                              </tbody>
-                                            </table>
+                              {/* Expanded payments row — DIAMOND */}
+                              {isExpanded && isDiamond && (() => {
+                                const detail = diamondDistDetails[diamondKey]
+                                return (
+                                  <tr key={`diamond-${item.id}-detail`} className="border-b border-white/10">
+                                    <td colSpan={7} className="bg-[#0A0A0A] px-4 py-4">
+                                      {loadingDetail === item.id ? (
+                                        <div className="flex items-center gap-2 text-white/40 text-sm py-2">
+                                          <Loader2 className="w-4 h-4 animate-spin" />
+                                          Loading payments...
+                                        </div>
+                                      ) : detail === null ? (
+                                        <p className="text-xs text-red-400">
+                                          Failed to load distribution details.
+                                        </p>
+                                      ) : detail ? (
+                                        <div>
+                                          <div className="flex flex-wrap items-center gap-4 mb-3 pb-3 border-b border-white/10">
+                                            <span className="text-xs font-black px-2 py-0.5 rounded bg-cyan-900/30 text-cyan-400 border border-cyan-500/20">
+                                              💎 DIAMOND HANDS
+                                            </span>
+                                            {item.completedAt && (
+                                              <span className="text-xs font-bold text-white/40">
+                                                COMPLETED <span className="text-white">{fmtDate(item.completedAt)}</span>
+                                              </span>
+                                            )}
                                           </div>
-                                        )}
-                                      </div>
-                                    ) : null}
-                                  </td>
-                                </tr>
-                              )}
-                            </>
+                                          {detail.payments.length === 0 ? (
+                                            <p className="text-xs text-white/40">
+                                              No payments recorded for this distribution.
+                                            </p>
+                                          ) : (
+                                            <div className="overflow-x-auto">
+                                              <table className="w-full min-w-[520px]">
+                                                <thead>
+                                                  <tr className="border-b border-white/10">
+                                                    <th className="text-left text-xs font-bold text-white/40 pb-2 pr-4">WALLET</th>
+                                                    <th className="text-right text-xs font-bold text-white/40 pb-2 px-4">AMOUNT ($CUM)</th>
+                                                    <th className="text-right text-xs font-bold text-white/40 pb-2 px-4">SHARE %</th>
+                                                    <th className="text-center text-xs font-bold text-white/40 pb-2 px-4">STATUS</th>
+                                                    <th className="text-right text-xs font-bold text-white/40 pb-2 pl-4">TX</th>
+                                                  </tr>
+                                                </thead>
+                                                <tbody>
+                                                  {detail.payments.map((p: ApiDiamondPayment, idx: number) => {
+                                                    const pBadge = distStatusBadge(p.status)
+                                                    return (
+                                                      <tr key={idx} className="border-b border-white/5">
+                                                        <td className="py-2 pr-4">
+                                                          <button
+                                                            onClick={(e) => { e.stopPropagation(); copyWallet(p.wallet) }}
+                                                            className="flex items-center gap-1.5 font-mono text-xs text-white hover:text-white/40 transition-colors"
+                                                          >
+                                                            {truncate(p.wallet)}
+                                                            {copiedWallet === p.wallet ? (
+                                                              <Check className="w-3 h-3 text-emerald-500" />
+                                                            ) : (
+                                                              <Copy className="w-3 h-3 opacity-40" />
+                                                            )}
+                                                          </button>
+                                                        </td>
+                                                        <td className="py-2 px-4 text-right font-mono text-xs text-cyan-400">
+                                                          {fmtSol(p.amountTokens)}
+                                                        </td>
+                                                        <td className="py-2 px-4 text-right font-mono text-xs text-white/40">
+                                                          {Number(p.percentage).toFixed(4)}%
+                                                        </td>
+                                                        <td className="py-2 px-4 text-center">
+                                                          <span className={`text-xs font-black px-1.5 py-0.5 rounded ${pBadge.cls}`}>
+                                                            {pBadge.label}
+                                                          </span>
+                                                        </td>
+                                                        <td className="py-2 pl-4 text-right">
+                                                          {p.txSignature ? (
+                                                            <a
+                                                              href={`${SOLSCAN_TX}${p.txSignature}`}
+                                                              target="_blank"
+                                                              rel="noopener noreferrer"
+                                                              onClick={(e) => e.stopPropagation()}
+                                                              className="inline-flex items-center gap-1 text-xs font-mono text-white/40 hover:text-white transition-colors"
+                                                            >
+                                                              {truncate(p.txSignature)}
+                                                              <ExternalLink className="w-3 h-3" />
+                                                            </a>
+                                                          ) : (
+                                                            <span className="text-xs text-white/40">—</span>
+                                                          )}
+                                                        </td>
+                                                      </tr>
+                                                    )
+                                                  })}
+                                                </tbody>
+                                              </table>
+                                            </div>
+                                          )}
+                                        </div>
+                                      ) : null}
+                                    </td>
+                                  </tr>
+                                )
+                              })()}
+                            </React.Fragment>
                           )
                         })}
                   </tbody>
                 </table>
               </div>
 
-              {/* Pagination */}
-              {totalPages > 1 && (
+              {/* Pagination — only for instant filter */}
+              {historyFilter === "instant" && totalPages > 1 && (
                 <div className="px-4 py-3 border-t border-white/10 flex flex-wrap items-center justify-between gap-3">
                   <span className="text-xs font-bold text-white/40">
                     PAGE {currentPage} of {totalPages} · {totalDist} total distributions
