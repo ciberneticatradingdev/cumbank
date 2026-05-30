@@ -486,8 +486,14 @@ async function sendTokenBatches(
   // Pre-check: derive ATAs and batch-check which ones exist on-chain
   const ataMap: Map<string, PublicKey> = new Map();
   for (const payment of payments) {
-    const destAta = getAssociatedTokenAddressSync(mint, new PublicKey(payment.wallet), false, tokenProgram);
-    ataMap.set(payment.wallet, destAta);
+    try {
+      // allowOwnerOffCurve = true — some holders are PDAs (multisigs, programs)
+      const destAta = getAssociatedTokenAddressSync(mint, new PublicKey(payment.wallet), true, tokenProgram);
+      ataMap.set(payment.wallet, destAta);
+    } catch (err) {
+      // Invalid wallet pubkey — skip this payment
+      logger.warn('Cannot derive ATA for wallet, skipping', { wallet: payment.wallet, error: String(err) });
+    }
   }
 
   // Check all ATAs in batches of 100 (getMultipleAccountsInfo limit)
@@ -518,7 +524,7 @@ async function sendTokenBatches(
   const skipped: TokenPaymentInfo[] = [];
 
   for (const payment of payments) {
-    if (existingATAs.has(payment.wallet)) {
+    if (existingATAs.has(payment.wallet) && ataMap.has(payment.wallet)) {
       eligible.push(payment);
     } else {
       skipped.push(payment);
