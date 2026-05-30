@@ -22,14 +22,12 @@ export interface SwapResult {
   txSignature: string;
 }
 
-// ── PumpAMM program (the actual swap program) ────────────────────────────────
+// ── PumpAMM constants ────────────────────────────────────────────────────────
 const PUMP_AMM_PROGRAM = new PublicKey('pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA');
-
-// Fee program
 const FEE_PROGRAM = new PublicKey('pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ');
 
-// buy_exact_quote_in discriminator: [198, 46, 21, 82, 180, 217, 232, 112]
-const BUY_EXACT_QUOTE_IN_DISC = Buffer.from([198, 46, 21, 82, 180, 217, 232, 112]);
+// Anchor "buy" discriminator: sha256("global:buy")[:8]
+const BUY_DISCRIMINATOR = Buffer.from([102, 6, 61, 18, 1, 218, 235, 234]);
 
 // Global config PDA for PumpAMM
 const [GLOBAL_CONFIG] = PublicKey.findProgramAddressSync(
@@ -43,13 +41,35 @@ const [EVENT_AUTHORITY] = PublicKey.findProgramAddressSync(
   PUMP_AMM_PROGRAM
 );
 
+// Global volume accumulator PDA
+const [GLOBAL_VOLUME_ACCUMULATOR] = PublicKey.findProgramAddressSync(
+  [Buffer.from('global_volume_accumulator')],
+  PUMP_AMM_PROGRAM
+);
+
+// Fee config PDA: seeds = ["fee_config", <32-byte constant>] on the fee program.
+// The 32-byte constant is the pump.fun address-config discriminant.
+const FEE_CONFIG_SEED_CONST = Buffer.from([
+  12, 20, 222, 252, 130, 94, 198, 118, 148, 37, 8, 24,
+  187, 101, 64, 101, 244, 41, 141, 49, 86, 213, 113, 180,
+  212, 248, 9, 12, 24, 233, 168, 99,
+]);
+const [PUMP_AMM_FEE_CONFIG] = PublicKey.findProgramAddressSync(
+  [Buffer.from('fee_config'), FEE_CONFIG_SEED_CONST],
+  FEE_PROGRAM
+);
+
+// ── Pool info ────────────────────────────────────────────────────────────────
+
 interface PoolInfo {
   address: PublicKey;
-  creator: PublicKey;
+  creator: PublicKey;      // pool creator (offset 11)
+  coinCreator: PublicKey;  // coin creator for fee vault (offset 211 in Pump AMM)
   baseMint: PublicKey;
   quoteMint: PublicKey;
   poolBaseTokenAccount: PublicKey;
   poolQuoteTokenAccount: PublicKey;
+  protocolFeeRecipient: PublicKey;
 }
 
 let cachedPool: PoolInfo | null = null;
@@ -83,61 +103,78 @@ async function getPoolInfo(): Promise<PoolInfo> {
     throw new Error(`Could not determine pool address: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  // Step 2: Read pool account on-chain to get ACTUAL token accounts
+  // Step 2: Read pool account on-chain
   // PumpAMM Pool layout:
-  // [0..8]    discriminator
-  // [8]       pool_bump (1 byte)
-  // [9..11]   index (2 bytes)
-  // [11..43]  creator (32 bytes)
-  // [43..75]  base_mint (32 bytes)
-  // [75..107] quote_mint (32 bytes)
+  // [0..8]     discriminator
+  // [8]        pool_bump (1 byte)
+  // [9..11]    index (2 bytes)
+  // [11..43]   creator (32 bytes)
+  // [43..75]   base_mint (32 bytes)
+  // [75..107]  quote_mint (32 bytes)
   // [107..139] lp_mint (32 bytes)
   // [139..171] pool_base_token_account (32 bytes)
   // [171..203] pool_quote_token_account (32 bytes)
+  // [203..211] lp_supply (u64) — legacy; Pump AMM: lp_fee_basis_points
+  // [211..243] coin_creator (32 bytes) — Pump AMM specific
   const accountInfo = await connection.getAccountInfo(poolAddress);
   if (!accountInfo) throw new Error('Pool account not found on-chain');
-  if (accountInfo.data.length < 203) throw new Error(`Pool account data too short: ${accountInfo.data.length}`);
+  if (accountInfo.data.length < 243) throw new Error(`Pool account data too short: ${accountInfo.data.length}`);
 
   const data = accountInfo.data;
   const readPubkey = (offset: number) => new PublicKey(data.slice(offset, offset + 32));
 
+  // Step 3: Read protocol_fee_recipient from global config
+  // Layout: disc(8) + admin(32) + lp_fee(8) + proto_fee(8) + flags(1) + recipients([Pubkey;8])
+  const globalConfigInfo = await connection.getAccountInfo(GLOBAL_CONFIG);
+  if (!globalConfigInfo) throw new Error('Global config not found on-chain');
+
+  let protocolFeeRecipient: PublicKey | null = null;
+  const gcData = globalConfigInfo.data;
+  for (let i = 0; i < 8; i++) {
+    const offset = 57 + i * 32;
+    if (offset + 32 > gcData.length) break;
+    const pkBytes = gcData.slice(offset, offset + 32);
+    if (!pkBytes.every((b: number) => b === 0)) {
+      protocolFeeRecipient = new PublicKey(pkBytes);
+    }
+  }
+  if (!protocolFeeRecipient) throw new Error('No protocol fee recipient in global config');
+
   cachedPool = {
     address: poolAddress,
     creator: readPubkey(11),
+    coinCreator: readPubkey(211),
     baseMint: readPubkey(43),
     quoteMint: readPubkey(75),
     poolBaseTokenAccount: readPubkey(139),
     poolQuoteTokenAccount: readPubkey(171),
+    protocolFeeRecipient,
   };
 
   logger.info('Pool parsed from on-chain data', {
     pool: cachedPool.address.toBase58(),
     creator: cachedPool.creator.toBase58(),
+    coinCreator: cachedPool.coinCreator.toBase58(),
     baseMint: cachedPool.baseMint.toBase58(),
     quoteMint: cachedPool.quoteMint.toBase58(),
     poolBase: cachedPool.poolBaseTokenAccount.toBase58(),
     poolQuote: cachedPool.poolQuoteTokenAccount.toBase58(),
+    feeRecipient: cachedPool.protocolFeeRecipient.toBase58(),
   });
 
   return cachedPool;
 }
 
+// ── PDA derivations ──────────────────────────────────────────────────────────
+
 function deriveCoinCreatorVault(coinCreator: PublicKey) {
-  // Creator vault PDA on PumpAMM
+  // PDA["creator_vault", coin_creator] — note: "creator_vault" not "creator-vault"
   const [vaultAuthority] = PublicKey.findProgramAddressSync(
-    [Buffer.from('creator-vault'), coinCreator.toBuffer()],
+    [Buffer.from('creator_vault'), coinCreator.toBuffer()],
     PUMP_AMM_PROGRAM
   );
   const vaultAta = getAssociatedTokenAddressSync(config.wsolMint, vaultAuthority, true);
   return { vaultAuthority, vaultAta };
-}
-
-function deriveGlobalVolumeAccumulator() {
-  const [pda] = PublicKey.findProgramAddressSync(
-    [Buffer.from('global_volume_accumulator')],
-    PUMP_AMM_PROGRAM
-  );
-  return pda;
 }
 
 function deriveUserVolumeAccumulator(user: PublicKey) {
@@ -148,72 +185,67 @@ function deriveUserVolumeAccumulator(user: PublicKey) {
   return pda;
 }
 
-function deriveFeeConfig() {
-  const [pda] = PublicKey.findProgramAddressSync(
-    [Buffer.from('fee_config')],
-    FEE_PROGRAM
-  );
-  return pda;
-}
+// ── Build buy instruction ────────────────────────────────────────────────────
+// Pump AMM "buy" instruction: 23 accounts
+// Receives base tokens (e.g. $CUM), paying with quote tokens (e.g. WSOL)
 
-function buildBuyExactQuoteIn(
+function buildBuyInstruction(
   poolInfo: PoolInfo,
-  quoteAmountIn: bigint,   // lamports of WSOL to spend
-  minBaseOut: bigint,       // minimum $CUM tokens to receive (0 = no slippage protection)
+  baseAmountOut: bigint,     // minimum base tokens to receive
+  maxQuoteAmountIn: bigint,  // max WSOL lamports to spend
 ): TransactionInstruction {
   const userBaseAta = getAssociatedTokenAddressSync(config.rewardMint, config.walletPublicKey, false, TOKEN_2022_PROGRAM_ID);
   const userQuoteAta = getAssociatedTokenAddressSync(config.wsolMint, config.walletPublicKey);
-  
-  // Use ACTUAL on-chain pool token accounts (not derived ATAs)
-  const poolBaseAta = poolInfo.poolBaseTokenAccount;
-  const poolQuoteAta = poolInfo.poolQuoteTokenAccount;
-  
-  // Protocol fee recipient = the fee account from config
-  const protocolFeeRecipient = config.feeAccount;
-  const protocolFeeQuoteAta = getAssociatedTokenAddressSync(config.wsolMint, protocolFeeRecipient, true);
 
-  const { vaultAuthority, vaultAta } = deriveCoinCreatorVault(poolInfo.creator);
-  const globalVolumeAccumulator = deriveGlobalVolumeAccumulator();
+  // Fee recipient ATA (WSOL ATA of the protocol fee recipient)
+  const feeRecipientAta = getAssociatedTokenAddressSync(config.wsolMint, poolInfo.protocolFeeRecipient, true);
+
+  // Coin creator vault (derived from coinCreator, not pool creator)
+  const { vaultAuthority, vaultAta } = deriveCoinCreatorVault(poolInfo.coinCreator);
   const userVolumeAccumulator = deriveUserVolumeAccumulator(config.walletPublicKey);
-  const feeConfig = deriveFeeConfig();
 
-  // Data: discriminator (8) + spendable_quote_in (u64) + min_base_amount_out (u64) + track_volume (1 byte OptionBool: 0=None)
+  // Data: discriminator(8) + base_amount_out(u64) + max_quote_amount_in(u64) + track_volume(1 byte = Some(true))
   const data = Buffer.alloc(25);
-  BUY_EXACT_QUOTE_IN_DISC.copy(data, 0);
-  data.writeBigUInt64LE(quoteAmountIn, 8);
-  data.writeBigUInt64LE(minBaseOut, 16);
-  data.writeUInt8(0, 24); // OptionBool::None (don't track volume)
+  BUY_DISCRIMINATOR.copy(data, 0);
+  data.writeBigUInt64LE(baseAmountOut, 8);
+  data.writeBigUInt64LE(maxQuoteAmountIn, 16);
+  data.writeUInt8(1, 24); // track_volume = Some(true)
 
+  // 23 accounts for buy instruction (matches reference implementation)
   return new TransactionInstruction({
     programId: PUMP_AMM_PROGRAM,
     keys: [
-      { pubkey: poolInfo.address, isSigner: false, isWritable: true },                    // pool
-      { pubkey: config.walletPublicKey, isSigner: true, isWritable: true },          // user
-      { pubkey: GLOBAL_CONFIG, isSigner: false, isWritable: false },                 // global_config
-      { pubkey: config.rewardMint, isSigner: false, isWritable: false },             // base_mint ($CUM)
-      { pubkey: config.wsolMint, isSigner: false, isWritable: false },               // quote_mint (WSOL)
-      { pubkey: userBaseAta, isSigner: false, isWritable: true },                    // user_base_token_account
-      { pubkey: userQuoteAta, isSigner: false, isWritable: true },                   // user_quote_token_account
-      { pubkey: poolBaseAta, isSigner: false, isWritable: true },                    // pool_base_token_account
-      { pubkey: poolQuoteAta, isSigner: false, isWritable: true },                   // pool_quote_token_account
-      { pubkey: protocolFeeRecipient, isSigner: false, isWritable: false },          // protocol_fee_recipient
-      { pubkey: protocolFeeQuoteAta, isSigner: false, isWritable: true },            // protocol_fee_recipient_token_account
-      { pubkey: TOKEN_2022_PROGRAM_ID, isSigner: false, isWritable: false },          // base_token_program ($CUM = Token-2022)
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },              // quote_token_program (WSOL = Token Program)
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },       // system_program
-      { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },   // associated_token_program
-      { pubkey: EVENT_AUTHORITY, isSigner: false, isWritable: false },               // event_authority
-      { pubkey: PUMP_AMM_PROGRAM, isSigner: false, isWritable: false },              // program (self-ref)
-      { pubkey: vaultAta, isSigner: false, isWritable: true },                       // coin_creator_vault_ata
-      { pubkey: vaultAuthority, isSigner: false, isWritable: false },                // coin_creator_vault_authority
-      { pubkey: globalVolumeAccumulator, isSigner: false, isWritable: false },       // global_volume_accumulator
-      { pubkey: userVolumeAccumulator, isSigner: false, isWritable: true },          // user_volume_accumulator
-      { pubkey: feeConfig, isSigner: false, isWritable: false },                     // fee_config
-      { pubkey: FEE_PROGRAM, isSigner: false, isWritable: false },                   // fee_program
+      // 0-18: shared accounts (19)
+      { pubkey: poolInfo.address, isSigner: false, isWritable: true },                    // 0  pool
+      { pubkey: config.walletPublicKey, isSigner: true, isWritable: true },               // 1  user
+      { pubkey: GLOBAL_CONFIG, isSigner: false, isWritable: false },                      // 2  global_config
+      { pubkey: poolInfo.baseMint, isSigner: false, isWritable: false },                  // 3  base_mint ($CUM)
+      { pubkey: poolInfo.quoteMint, isSigner: false, isWritable: false },                 // 4  quote_mint (WSOL)
+      { pubkey: userBaseAta, isSigner: false, isWritable: true },                         // 5  user_base_token_account
+      { pubkey: userQuoteAta, isSigner: false, isWritable: true },                        // 6  user_quote_token_account
+      { pubkey: poolInfo.poolBaseTokenAccount, isSigner: false, isWritable: true },       // 7  pool_base_token_account
+      { pubkey: poolInfo.poolQuoteTokenAccount, isSigner: false, isWritable: true },      // 8  pool_quote_token_account
+      { pubkey: poolInfo.protocolFeeRecipient, isSigner: false, isWritable: false },      // 9  protocol_fee_recipient
+      { pubkey: feeRecipientAta, isSigner: false, isWritable: true },                     // 10 protocol_fee_recipient_ata
+      { pubkey: TOKEN_2022_PROGRAM_ID, isSigner: false, isWritable: false },              // 11 base_token_program ($CUM = Token-2022)
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },                   // 12 quote_token_program (WSOL = Token Classic)
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },            // 13 system_program
+      { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },        // 14 associated_token_program
+      { pubkey: EVENT_AUTHORITY, isSigner: false, isWritable: false },                    // 15 event_authority
+      { pubkey: PUMP_AMM_PROGRAM, isSigner: false, isWritable: false },                   // 16 program (self-ref)
+      { pubkey: vaultAta, isSigner: false, isWritable: true },                            // 17 coin_creator_vault_ata
+      { pubkey: vaultAuthority, isSigner: false, isWritable: false },                     // 18 coin_creator_vault_authority
+      // 19-22: buy-specific accounts (4)
+      { pubkey: GLOBAL_VOLUME_ACCUMULATOR, isSigner: false, isWritable: false },          // 19 global_volume_accumulator
+      { pubkey: userVolumeAccumulator, isSigner: false, isWritable: true },               // 20 user_volume_accumulator
+      { pubkey: PUMP_AMM_FEE_CONFIG, isSigner: false, isWritable: false },               // 21 fee_config
+      { pubkey: FEE_PROGRAM, isSigner: false, isWritable: false },                        // 22 fee_program
     ],
     data,
   });
 }
+
+// ── Main swap function ───────────────────────────────────────────────────────
 
 async function getCumBalance(connection: Connection, ata: PublicKey): Promise<bigint> {
   try {
@@ -257,12 +289,12 @@ export async function swapSolForCum(amountSol: string): Promise<SwapResult | nul
       }),
       // 3. Sync so the token balance reflects the deposited lamports
       createSyncNativeInstruction(userWsolAta),
-      // 4. Create $CUM ATA (idempotent)
+      // 4. Create $CUM ATA (idempotent, Token-2022)
       createAssociatedTokenAccountIdempotentInstruction(
         config.walletPublicKey, userCumAta, config.walletPublicKey, config.rewardMint, TOKEN_2022_PROGRAM_ID
       ),
-      // 5. Buy $CUM with WSOL via PumpAMM buy_exact_quote_in (using on-chain pool data)
-      buildBuyExactQuoteIn(poolInfo, lamports, BigInt(0)),
+      // 5. Buy $CUM via PumpAMM buy instruction (baseAmountOut=0 = no min, maxQuoteIn=lamports)
+      buildBuyInstruction(poolInfo, BigInt(0), lamports),
       // 6. Close WSOL ATA — returns any unspent WSOL as native SOL
       createCloseAccountInstruction(userWsolAta, config.walletPublicKey, config.walletPublicKey),
     ];
