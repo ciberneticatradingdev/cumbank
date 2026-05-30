@@ -10,6 +10,7 @@ import distributionsRouter from './routes/distributions';
 import holdersRouter from './routes/holders';
 import eventsRouter from './routes/events';
 import diamondRouter from './routes/diamond';
+import adminRouter from './routes/admin';
 
 const app = express();
 
@@ -23,6 +24,7 @@ app.use('/api', distributionsRouter);
 app.use('/api', holdersRouter);
 app.use('/api', eventsRouter);
 app.use('/api', diamondRouter);
+app.use('/api', adminRouter);
 
 async function main(): Promise<void> {
   logger.info('Starting PumpFun Revenue Share backend...');
