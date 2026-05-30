@@ -43,12 +43,24 @@ const [EVENT_AUTHORITY] = PublicKey.findProgramAddressSync(
   PUMP_AMM_PROGRAM
 );
 
-let cachedPoolAddress: PublicKey | null = null;
-let cachedPoolData: Record<string, unknown> | null = null;
+interface PoolInfo {
+  address: PublicKey;
+  creator: PublicKey;
+  baseMint: PublicKey;
+  quoteMint: PublicKey;
+  poolBaseTokenAccount: PublicKey;
+  poolQuoteTokenAccount: PublicKey;
+}
 
-async function getPoolAddress(): Promise<PublicKey> {
-  if (cachedPoolAddress) return cachedPoolAddress;
+let cachedPool: PoolInfo | null = null;
 
+async function getPoolInfo(): Promise<PoolInfo> {
+  if (cachedPool) return cachedPool;
+
+  const connection = getConnection();
+
+  // Step 1: Get pool address from pump.fun API
+  let poolAddress: PublicKey;
   try {
     const url = `https://frontend-api-v3.pump.fun/coins/${config.rewardMint.toBase58()}`;
     const resp = await fetch(url, {
@@ -57,29 +69,57 @@ async function getPoolAddress(): Promise<PublicKey> {
     });
     if (resp.ok) {
       const data = await resp.json() as Record<string, unknown>;
-      cachedPoolData = data;
       const poolAddr = data['pump_swap_pool'] || data['pool_address'] || data['raydium_pool'];
       if (poolAddr && typeof poolAddr === 'string') {
         logger.info('Pool address from API', { pool: poolAddr });
-        cachedPoolAddress = new PublicKey(poolAddr);
-        return cachedPoolAddress;
+        poolAddress = new PublicKey(poolAddr);
+      } else {
+        throw new Error('No pool address in API response');
       }
+    } else {
+      throw new Error(`API returned ${resp.status}`);
     }
   } catch (err) {
-    logger.warn('Failed to fetch pool from API', {
-      error: err instanceof Error ? err.message : String(err),
-    });
+    throw new Error(`Could not determine pool address: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  throw new Error('Could not determine pool address from pump.fun API');
-}
+  // Step 2: Read pool account on-chain to get ACTUAL token accounts
+  // PumpAMM Pool layout:
+  // [0..8]    discriminator
+  // [8]       pool_bump (1 byte)
+  // [9..11]   index (2 bytes)
+  // [11..43]  creator (32 bytes)
+  // [43..75]  base_mint (32 bytes)
+  // [75..107] quote_mint (32 bytes)
+  // [107..139] lp_mint (32 bytes)
+  // [139..171] pool_base_token_account (32 bytes)
+  // [171..203] pool_quote_token_account (32 bytes)
+  const accountInfo = await connection.getAccountInfo(poolAddress);
+  if (!accountInfo) throw new Error('Pool account not found on-chain');
+  if (accountInfo.data.length < 203) throw new Error(`Pool account data too short: ${accountInfo.data.length}`);
 
-// Derive PDAs needed for the swap
-function derivePoolTokenAccounts(poolAddress: PublicKey) {
-  // Pool's token accounts are ATAs owned by the pool (allowOwnerOffCurve=true)
-  const poolBaseAta = getAssociatedTokenAddressSync(config.rewardMint, poolAddress, true, TOKEN_2022_PROGRAM_ID);
-  const poolQuoteAta = getAssociatedTokenAddressSync(config.wsolMint, poolAddress, true);
-  return { poolBaseAta, poolQuoteAta };
+  const data = accountInfo.data;
+  const readPubkey = (offset: number) => new PublicKey(data.slice(offset, offset + 32));
+
+  cachedPool = {
+    address: poolAddress,
+    creator: readPubkey(11),
+    baseMint: readPubkey(43),
+    quoteMint: readPubkey(75),
+    poolBaseTokenAccount: readPubkey(139),
+    poolQuoteTokenAccount: readPubkey(171),
+  };
+
+  logger.info('Pool parsed from on-chain data', {
+    pool: cachedPool.address.toBase58(),
+    creator: cachedPool.creator.toBase58(),
+    baseMint: cachedPool.baseMint.toBase58(),
+    quoteMint: cachedPool.quoteMint.toBase58(),
+    poolBase: cachedPool.poolBaseTokenAccount.toBase58(),
+    poolQuote: cachedPool.poolQuoteTokenAccount.toBase58(),
+  });
+
+  return cachedPool;
 }
 
 function deriveCoinCreatorVault(coinCreator: PublicKey) {
@@ -117,20 +157,22 @@ function deriveFeeConfig() {
 }
 
 function buildBuyExactQuoteIn(
-  poolAddress: PublicKey,
+  poolInfo: PoolInfo,
   quoteAmountIn: bigint,   // lamports of WSOL to spend
   minBaseOut: bigint,       // minimum $CUM tokens to receive (0 = no slippage protection)
-  coinCreator: PublicKey,
 ): TransactionInstruction {
   const userBaseAta = getAssociatedTokenAddressSync(config.rewardMint, config.walletPublicKey, false, TOKEN_2022_PROGRAM_ID);
   const userQuoteAta = getAssociatedTokenAddressSync(config.wsolMint, config.walletPublicKey);
-  const { poolBaseAta, poolQuoteAta } = derivePoolTokenAccounts(poolAddress);
+  
+  // Use ACTUAL on-chain pool token accounts (not derived ATAs)
+  const poolBaseAta = poolInfo.poolBaseTokenAccount;
+  const poolQuoteAta = poolInfo.poolQuoteTokenAccount;
   
   // Protocol fee recipient = the fee account from config
   const protocolFeeRecipient = config.feeAccount;
   const protocolFeeQuoteAta = getAssociatedTokenAddressSync(config.wsolMint, protocolFeeRecipient, true);
 
-  const { vaultAuthority, vaultAta } = deriveCoinCreatorVault(coinCreator);
+  const { vaultAuthority, vaultAta } = deriveCoinCreatorVault(poolInfo.creator);
   const globalVolumeAccumulator = deriveGlobalVolumeAccumulator();
   const userVolumeAccumulator = deriveUserVolumeAccumulator(config.walletPublicKey);
   const feeConfig = deriveFeeConfig();
@@ -145,7 +187,7 @@ function buildBuyExactQuoteIn(
   return new TransactionInstruction({
     programId: PUMP_AMM_PROGRAM,
     keys: [
-      { pubkey: poolAddress, isSigner: false, isWritable: true },                    // pool
+      { pubkey: poolInfo.address, isSigner: false, isWritable: true },                    // pool
       { pubkey: config.walletPublicKey, isSigner: true, isWritable: true },          // user
       { pubkey: GLOBAL_CONFIG, isSigner: false, isWritable: false },                 // global_config
       { pubkey: config.rewardMint, isSigner: false, isWritable: false },             // base_mint ($CUM)
@@ -194,17 +236,7 @@ export async function swapSolForCum(amountSol: string): Promise<SwapResult | nul
 
     logger.info('Starting SOL → $CUM swap', { amountSol });
 
-    const poolAddress = await getPoolAddress();
-
-    // We need the coin creator for the creator vault PDA
-    // Fetch from API data or use a known creator
-    let coinCreator = config.walletPublicKey; // default: ourselves
-    if (cachedPoolData) {
-      const creator = cachedPoolData['creator'] as string | undefined;
-      if (creator) {
-        coinCreator = new PublicKey(creator);
-      }
-    }
+    const poolInfo = await getPoolInfo();
 
     const userWsolAta = getAssociatedTokenAddressSync(config.wsolMint, config.walletPublicKey);
     const userCumAta = getAssociatedTokenAddressSync(config.rewardMint, config.walletPublicKey, false, TOKEN_2022_PROGRAM_ID);
@@ -229,8 +261,8 @@ export async function swapSolForCum(amountSol: string): Promise<SwapResult | nul
       createAssociatedTokenAccountIdempotentInstruction(
         config.walletPublicKey, userCumAta, config.walletPublicKey, config.rewardMint, TOKEN_2022_PROGRAM_ID
       ),
-      // 5. Buy $CUM with WSOL via PumpAMM buy_exact_quote_in
-      buildBuyExactQuoteIn(poolAddress, lamports, BigInt(0), coinCreator),
+      // 5. Buy $CUM with WSOL via PumpAMM buy_exact_quote_in (using on-chain pool data)
+      buildBuyExactQuoteIn(poolInfo, lamports, BigInt(0)),
       // 6. Close WSOL ATA — returns any unspent WSOL as native SOL
       createCloseAccountInstruction(userWsolAta, config.walletPublicKey, config.walletPublicKey),
     ];
@@ -250,8 +282,7 @@ export async function swapSolForCum(amountSol: string): Promise<SwapResult | nul
     const errorMessage = err instanceof Error ? err.message : (typeof err === 'object' ? JSON.stringify(err) : String(err));
     logger.error('SOL → $CUM swap failed', { error: errorMessage, stack: err instanceof Error ? err.stack : undefined });
     // Invalidate cached pool
-    cachedPoolAddress = null;
-    cachedPoolData = null;
+    cachedPool = null;
     return null;
   }
 }

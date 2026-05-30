@@ -381,10 +381,10 @@ export default function DashboardPage() {
                   <Sk className="h-9 w-3/4 mb-1" />
                 ) : (
                   <p className="text-2xl font-black text-white leading-none">
-                    ${fmtSol(stats?.totalClaimedSol)}
+                    {fmtSol(stats?.totalClaimedSol)}
                   </p>
                 )}
-                <p className="text-xs text-white/40 mt-1">$CUM</p>
+                <p className="text-xs text-white/40 mt-1">SOL</p>
               </div>
 
               {/* Total Distributed */}
@@ -397,7 +397,7 @@ export default function DashboardPage() {
                   <Sk className="h-9 w-3/4 mb-1" />
                 ) : (
                   <p className="text-2xl font-black text-white leading-none">
-                    ${fmtSol(stats?.totalDistributed)}
+                    {fmtSol(stats?.totalDistributed)}
                   </p>
                 )}
                 <p className="text-xs text-white/40 mt-1">$CUM</p>
@@ -429,7 +429,7 @@ export default function DashboardPage() {
                   <Sk className="h-9 w-3/4 mb-1" />
                 ) : (
                   <p className="text-2xl font-black text-white leading-none">
-                    ${fmtSol(stats?.avgPerRound)}
+                    {fmtSol(stats?.avgPerRound)}
                   </p>
                 )}
                 <p className="text-xs text-white/40 mt-1">$CUM / ROUND</p>

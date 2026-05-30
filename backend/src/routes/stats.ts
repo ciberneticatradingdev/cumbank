@@ -39,7 +39,7 @@ router.get('/stats', async (_req: Request, res: Response) => {
       totalDistributed,
       totalRounds,
       totalClaims,
-      totalClaimedSol,
+      totalClaimedSol: totalClaimedResult.rows[0].total,
       currentHolders,
       qualifiedHolders: currentHolders,
       lastClaimAt,
