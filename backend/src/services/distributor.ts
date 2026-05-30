@@ -440,7 +440,9 @@ export async function distributeCumDiamond(
 
 /**
  * Send $CUM token transfers in small batches.
- * Each batch: createATA (idempotent) + transfer for each holder.
+ * ONLY sends to holders who already have a $CUM token account (ATA).
+ * Does NOT create ATAs — avoids paying ~0.002 SOL rent per holder.
+ * Holders must buy or receive $CUM at least once to have an ATA.
  */
 async function sendTokenBatches(
   payments: TokenPaymentInfo[],
@@ -450,11 +452,72 @@ async function sendTokenBatches(
 ): Promise<{ successCount: number; failCount: number }> {
   let successCount = 0;
   let failCount = 0;
+  let skippedCount = 0;
   // Determine if mint uses Token-2022 (pump.fun tokens do)
   const isToken2022 = mint.equals(config.rewardMint);
   const tokenProgram = isToken2022 ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
   const sourceAta = getAssociatedTokenAddressSync(mint, config.walletPublicKey, false, tokenProgram);
-  const batches = chunkArray(payments, TOKEN_BATCH_SIZE);
+
+  const connection = getConnection();
+
+  // Pre-check: derive ATAs and batch-check which ones exist on-chain
+  const ataMap: Map<string, PublicKey> = new Map();
+  for (const payment of payments) {
+    const destAta = getAssociatedTokenAddressSync(mint, new PublicKey(payment.wallet), false, tokenProgram);
+    ataMap.set(payment.wallet, destAta);
+  }
+
+  // Check all ATAs in batches of 100 (getMultipleAccountsInfo limit)
+  const wallets = payments.map(p => p.wallet);
+  const ataKeys = wallets.map(w => ataMap.get(w)!);
+  const existingATAs = new Set<string>();
+
+  for (let i = 0; i < ataKeys.length; i += 100) {
+    const slice = ataKeys.slice(i, i + 100);
+    const infos = await connection.getMultipleAccountsInfo(slice);
+    for (let j = 0; j < infos.length; j++) {
+      if (infos[j] !== null) {
+        existingATAs.add(wallets[i + j]);
+      }
+    }
+  }
+
+  // Split into eligible (has ATA) and skipped (no ATA)
+  const eligible: TokenPaymentInfo[] = [];
+  const skipped: TokenPaymentInfo[] = [];
+
+  for (const payment of payments) {
+    if (existingATAs.has(payment.wallet)) {
+      eligible.push(payment);
+    } else {
+      skipped.push(payment);
+    }
+  }
+
+  // Mark skipped payments in DB
+  for (const payment of skipped) {
+    await pool.query(
+      `UPDATE ${paymentsTable}
+       SET status = 'skipped', error_message = 'No $CUM token account — holder must buy $CUM first'
+       WHERE distribution_id = $1 AND wallet = $2 AND status = 'pending'`,
+      [distributionId, payment.wallet]
+    );
+    skippedCount++;
+  }
+
+  if (skipped.length > 0) {
+    logger.info(`Skipped ${skipped.length} holders without $CUM ATA (no rent cost)`, {
+      eligible: eligible.length,
+      skipped: skipped.length,
+    });
+  }
+
+  if (eligible.length === 0) {
+    logger.info('No eligible holders with existing $CUM ATAs');
+    return { successCount: 0, failCount: 0 };
+  }
+
+  const batches = chunkArray(eligible, TOKEN_BATCH_SIZE);
 
   for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
     const batch = batches[batchIdx];
@@ -464,19 +527,9 @@ async function sendTokenBatches(
       const instructions = [];
 
       for (const payment of batch) {
-        const destAta = getAssociatedTokenAddressSync(mint, new PublicKey(payment.wallet), false, tokenProgram);
+        const destAta = ataMap.get(payment.wallet)!;
 
-        // Create ATA for recipient if it doesn't exist yet
-        instructions.push(
-          createAssociatedTokenAccountIdempotentInstruction(
-            config.walletPublicKey,
-            destAta,
-            new PublicKey(payment.wallet),
-            mint,
-            tokenProgram
-          )
-        );
-
+        // No createATA — we only send to existing accounts
         instructions.push(
           createTransferInstruction(
             sourceAta,

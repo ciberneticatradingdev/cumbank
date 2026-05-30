@@ -39,7 +39,11 @@ export default function TokenPage() {
     },
     {
       question: "WHAT IS THE REWARD TOKEN?",
-      answer: "Rewards are paid in $CUM tokens. Trading fees are claimed as SOL, then automatically swapped to $CUM on pump.fun and distributed to your wallet every 90 seconds. The vault never sleeps."
+      answer: "Rewards are paid in $CUM tokens. Trading fees are claimed as SOL, then automatically swapped to $CUM via Jupiter and distributed to your wallet every 90 seconds. The vault never sleeps."
+    },
+    {
+      question: "HOW DO I BECOME ELIGIBLE FOR DISTRIBUTIONS?",
+      answer: "You need a $CUM token account in your wallet. The easiest way: buy any amount of $CUM on pump.fun or Jupiter. Once you have a $CUM account, you'll receive distributions automatically as long as you hold $CUMBANK. We don't create accounts for you — this keeps the vault running efficiently without spending SOL on rent fees."
     },
     {
       question: "HOW IS MY SHARE CALCULATED?",
