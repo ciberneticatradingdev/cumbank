@@ -103,7 +103,7 @@ export default function TokenPage() {
           </nav>
           <div className="flex items-center gap-2">
             <a
-              href="https://pump.fun"
+              href={`https://pump.fun/coin/${config.tokenCA}`}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center justify-center w-9 h-9 bg-white/5 hover:bg-white/10 rounded-lg transition-colors"

@@ -306,7 +306,7 @@ export default function DashboardPage() {
               <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
             </button>
             <a
-              href="https://pump.fun"
+              href={`https://pump.fun/coin/${config.tokenCA}`}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center justify-center w-9 h-9 bg-[#0A0A0A]/60 hover:bg-[#0A0A0A] rounded-lg transition-colors"
