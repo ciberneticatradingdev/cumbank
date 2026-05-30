@@ -17,6 +17,9 @@ import {
   Gem,
   Repeat,
   BarChart2,
+  Diamond,
+  Timer,
+  Shield,
 } from "lucide-react"
 import Image from "next/image"
 import { config } from "@/lib/config"
@@ -87,6 +90,26 @@ interface ApiDistributionDetail {
   payments: ApiPayment[]
 }
 
+interface ApiDiamondDistribution {
+  id: number
+  totalAmountTokens: string
+  holderCount: number
+  status: string
+  createdAt: string
+  completedAt: string | null
+}
+
+interface ApiDiamondData {
+  accumulated: string
+  totalDistributed: string
+  totalRounds: number
+  lastDistributionAt: string | null
+  nextDistributionIn: number
+  qualifiedHolders: number
+  totalHolders: number
+  recentDistributions: ApiDiamondDistribution[]
+}
+
 interface DistPagination {
   page: number
   limit: number
@@ -150,6 +173,8 @@ export default function DashboardPage() {
   const [distributionDetails, setDistributionDetails] = useState<
     Record<number, ApiDistributionDetail | null>
   >({})
+  const [diamondData, setDiamondData] = useState<ApiDiamondData | null>(null)
+  const [diamondCountdown, setDiamondCountdown] = useState<number>(0)
 
   // UI
   const [loading, setLoading]               = useState(true)
@@ -219,12 +244,24 @@ export default function DashboardPage() {
     [distributionDetails]
   )
 
+  const fetchDiamond = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/diamond`)
+      const json = await res.json()
+      setDiamondData(json)
+      setDiamondCountdown(json.nextDistributionIn ?? 0)
+    } catch (err) {
+      console.error("fetchDiamond:", err)
+    }
+  }, [])
+
   // ── Effects ──────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     fetchCoreData()
     fetchHolders()
     fetchDistributions(1)
+    fetchDiamond()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -233,9 +270,18 @@ export default function DashboardPage() {
     const id = setInterval(() => {
       fetchCoreData(true)
       fetchHolders()
+      fetchDiamond()
     }, 30_000)
     return () => clearInterval(id)
-  }, [fetchCoreData, fetchHolders])
+  }, [fetchCoreData, fetchHolders, fetchDiamond])
+
+  // Diamond countdown timer — tick every second
+  useEffect(() => {
+    const id = setInterval(() => {
+      setDiamondCountdown((prev) => Math.max(0, prev - 1000))
+    }, 1000)
+    return () => clearInterval(id)
+  }, [])
 
   // Re-fetch distributions when page changes (only in history tab)
   useEffect(() => {
@@ -503,6 +549,155 @@ export default function DashboardPage() {
                       <span className="font-black text-white text-xl">
                         {fmtNum(stats?.totalRounds)}
                       </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* 💎 Diamond Hands Vault */}
+            <div className="bg-[#0A0A0A] rounded-xl border border-white/10 overflow-hidden">
+              <div className="px-4 py-3 border-b border-white/10 flex items-center gap-2">
+                <Diamond className="w-4 h-4 text-cyan-400" />
+                <h3 className="font-black text-white text-sm">💎 DIAMOND HANDS VAULT</h3>
+                <span className="ml-auto text-xs font-bold text-white/30">1H CYCLE</span>
+              </div>
+
+              <div className="p-4 space-y-4">
+                {/* Top stats row */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                  {/* Accumulated */}
+                  <div className="bg-black rounded-lg border border-white/10 p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Shield className="w-3.5 h-3.5 text-cyan-400/50" />
+                      <p className="text-xs font-bold text-white/30">ACCUMULATED</p>
+                    </div>
+                    {!diamondData ? (
+                      <Sk className="h-8 w-3/4" />
+                    ) : (
+                      <p className="text-2xl font-black text-cyan-400 leading-none">
+                        {fmtSol(diamondData.accumulated)}
+                      </p>
+                    )}
+                    <p className="text-xs text-white/40 mt-1">$CUM PENDING</p>
+                  </div>
+
+                  {/* Countdown */}
+                  <div className="bg-black rounded-lg border border-white/10 p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Timer className="w-3.5 h-3.5 text-white/30" />
+                      <p className="text-xs font-bold text-white/30">NEXT DROP</p>
+                    </div>
+                    {!diamondData ? (
+                      <Sk className="h-8 w-3/4" />
+                    ) : (
+                      <p className="text-2xl font-black text-white leading-none font-mono">
+                        {(() => {
+                          const totalSec = Math.floor(diamondCountdown / 1000)
+                          const m = Math.floor(totalSec / 60)
+                          const s = totalSec % 60
+                          return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`
+                        })()}
+                      </p>
+                    )}
+                    <p className="text-xs text-white/40 mt-1">MIN:SEC</p>
+                  </div>
+
+                  {/* Diamond Holders */}
+                  <div className="bg-black rounded-lg border border-white/10 p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Diamond className="w-3.5 h-3.5 text-cyan-400/50" />
+                      <p className="text-xs font-bold text-white/30">💎 HOLDERS</p>
+                    </div>
+                    {!diamondData ? (
+                      <Sk className="h-8 w-1/2" />
+                    ) : (
+                      <p className="text-2xl font-black text-white leading-none">
+                        {fmtNum(diamondData.qualifiedHolders)}
+                        <span className="text-sm font-bold text-white/30 ml-1">/ {fmtNum(diamondData.totalHolders)}</span>
+                      </p>
+                    )}
+                    <p className="text-xs text-white/40 mt-1">QUALIFIED / TOTAL</p>
+                  </div>
+
+                  {/* Total Distributed */}
+                  <div className="bg-black rounded-lg border border-white/10 p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <TrendingUp className="w-3.5 h-3.5 text-white/30" />
+                      <p className="text-xs font-bold text-white/30">TOTAL 💎 DISTRIBUTED</p>
+                    </div>
+                    {!diamondData ? (
+                      <Sk className="h-8 w-3/4" />
+                    ) : (
+                      <p className="text-2xl font-black text-white leading-none">
+                        {fmtSol(diamondData.totalDistributed)}
+                      </p>
+                    )}
+                    <p className="text-xs text-white/40 mt-1">$CUM · {diamondData ? fmtNum(diamondData.totalRounds) : "—"} ROUNDS</p>
+                  </div>
+                </div>
+
+                {/* Progress bar — % of holders qualifying */}
+                {diamondData && diamondData.totalHolders > 0 && (
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-xs font-bold text-white/40">DIAMOND HAND RATE</span>
+                      <span className="text-xs font-black text-cyan-400">
+                        {((diamondData.qualifiedHolders / diamondData.totalHolders) * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                    <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-cyan-500 to-cyan-300 rounded-full transition-all duration-500"
+                        style={{ width: `${Math.min(100, (diamondData.qualifiedHolders / diamondData.totalHolders) * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Recent Diamond Distributions table */}
+                {diamondData && diamondData.recentDistributions.length > 0 && (
+                  <div>
+                    <p className="text-xs font-bold text-white/30 mb-2 uppercase tracking-wide">RECENT 💎 DISTRIBUTIONS</p>
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[500px]">
+                        <thead>
+                          <tr className="border-b border-white/10">
+                            {["ID", "DATE", "AMOUNT", "💎 HOLDERS", "STATUS"].map((h, i) => (
+                              <th
+                                key={h}
+                                className={`text-xs font-bold text-white/40 px-3 py-2 ${
+                                  i >= 2 ? "text-right" : "text-left"
+                                } ${i === 4 ? "text-center" : ""}`}
+                              >
+                                {h}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {diamondData.recentDistributions.map((d) => {
+                            const badge = distStatusBadge(d.status)
+                            return (
+                              <tr key={d.id} className="border-b border-white/5 hover:bg-black/50 transition-colors">
+                                <td className="px-3 py-2.5 font-mono text-sm text-white font-bold">#{d.id}</td>
+                                <td className="px-3 py-2.5 text-xs text-white/40">{fmtDate(d.createdAt)}</td>
+                                <td className="px-3 py-2.5 text-right font-mono text-sm text-cyan-400">
+                                  {fmtSol(d.totalAmountTokens)}
+                                </td>
+                                <td className="px-3 py-2.5 text-right font-mono text-sm text-white/40">
+                                  {d.holderCount}
+                                </td>
+                                <td className="px-3 py-2.5 text-center">
+                                  <span className={`text-xs font-black px-2 py-0.5 rounded ${badge.cls}`}>
+                                    {badge.label}
+                                  </span>
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
                     </div>
                   </div>
                 )}
