@@ -10,5 +10,5 @@ export const config = {
   twitterUrl: process.env.NEXT_PUBLIC_TWITTER_URL || "",
   tokenDescription:
     process.env.NEXT_PUBLIC_TOKEN_DESCRIPTION ||
-    "Deposit Today. Invest in Tomorrow. Hold $CUMBANK, earn SOL automatically every 90 seconds. 🏦",
+    "Deposit Today. Invest in Tomorrow. Hold $CUMBANK, earn $CUM tokens automatically. 50/50 split: instant + diamond hands. 🏦",
 }

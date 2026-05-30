@@ -27,14 +27,14 @@ export const metadata: Metadata = {
   },
   openGraph: {
     title: 'CUMBANK — Deposit Today. Invest in Tomorrow.',
-    description: 'Hold $CUMBANK, earn SOL automatically every 90 seconds. The bank is always open. 🏦',
+    description: 'Hold $CUMBANK, earn $CUM tokens automatically. 50% instant + 50% diamond hands. The bank is always open. 🏦',
     images: [{ url: '/og-image.jpg', width: 1200, height: 1200, alt: 'CUMBANK' }],
     type: 'website',
   },
   twitter: {
     card: 'summary_large_image',
     title: 'CUMBANK — Deposit Today. Invest in Tomorrow.',
-    description: 'Hold $CUMBANK, earn SOL automatically every 90 seconds. 🏦',
+    description: 'Hold $CUMBANK, earn $CUM tokens automatically. 🏦',
     images: ['/og-image.jpg'],
   },
 }

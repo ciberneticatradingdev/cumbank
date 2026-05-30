@@ -99,7 +99,7 @@ interface DistPagination {
 const truncate = (w: string) =>
   w && w.length >= 8 ? `${w.slice(0, 4)}...${w.slice(-4)}` : w ?? "—"
 
-/** Amounts from the API are already SOL decimal strings — just format them. */
+/** Amounts from the API are decimal strings — format them. */
 const fmtSol = (s: string | number | undefined | null) => {
   const n = typeof s === "string" ? parseFloat(s) : (s ?? 0)
   if (isNaN(n)) return "0.0000"
@@ -371,7 +371,7 @@ export default function DashboardPage() {
             {/* Stat cards — 2×2 → 4-col */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
 
-              {/* Total Claimed SOL */}
+              {/* Total Claimed */}
               <div className="bg-[#0A0A0A] rounded-xl border border-white/10 p-4 ">
                 <div className="flex items-center gap-2 mb-3">
                   <Gem className="w-4 h-4 text-white/30" />
@@ -381,10 +381,10 @@ export default function DashboardPage() {
                   <Sk className="h-9 w-3/4 mb-1" />
                 ) : (
                   <p className="text-2xl font-black text-white leading-none">
-                    ◎{fmtSol(stats?.totalClaimedSol)}
+                    ${fmtSol(stats?.totalClaimedSol)}
                   </p>
                 )}
-                <p className="text-xs text-white/40 mt-1">SOL</p>
+                <p className="text-xs text-white/40 mt-1">$CUM</p>
               </div>
 
               {/* Total Distributed */}
@@ -397,10 +397,10 @@ export default function DashboardPage() {
                   <Sk className="h-9 w-3/4 mb-1" />
                 ) : (
                   <p className="text-2xl font-black text-white leading-none">
-                    ◎{fmtSol(stats?.totalDistributed)}
+                    ${fmtSol(stats?.totalDistributed)}
                   </p>
                 )}
-                <p className="text-xs text-white/40 mt-1">SOL</p>
+                <p className="text-xs text-white/40 mt-1">$CUM</p>
               </div>
 
               {/* Total Rounds */}
@@ -429,10 +429,10 @@ export default function DashboardPage() {
                   <Sk className="h-9 w-3/4 mb-1" />
                 ) : (
                   <p className="text-2xl font-black text-white leading-none">
-                    ◎{fmtSol(stats?.avgPerRound)}
+                    ${fmtSol(stats?.avgPerRound)}
                   </p>
                 )}
-                <p className="text-xs text-white/40 mt-1">SOL / ROUND</p>
+                <p className="text-xs text-white/40 mt-1">$CUM / ROUND</p>
               </div>
             </div>
 
@@ -561,7 +561,7 @@ export default function DashboardPage() {
                                 {fmtDate(d.createdAt)}
                               </td>
                               <td className="px-4 py-3 text-right font-mono text-sm text-white">
-                                ◎{fmtSol(d.totalAmountSol)}
+                                ${fmtSol(d.totalAmountSol)}
                               </td>
                               <td className="px-4 py-3 text-right font-mono text-sm text-white/40">
                                 {d.holderCount}
@@ -780,7 +780,7 @@ export default function DashboardPage() {
                                   {fmtDate(dist.createdAt)}
                                 </td>
                                 <td className="px-4 py-3 text-right font-mono text-sm text-white">
-                                  ◎{fmtSol(dist.totalAmountSol)}
+                                  ${fmtSol(dist.totalAmountSol)}
                                 </td>
                                 <td className="px-4 py-3 text-right font-mono text-sm text-white/40">
                                   {dist.holderCount}
@@ -835,7 +835,7 @@ export default function DashboardPage() {
                                                     WALLET
                                                   </th>
                                                   <th className="text-right text-xs font-bold text-white/40 pb-2 px-4">
-                                                    AMOUNT (SOL)
+                                                    AMOUNT ($CUM)
                                                   </th>
                                                   <th className="text-right text-xs font-bold text-white/40 pb-2 px-4">
                                                     SHARE %
@@ -873,7 +873,7 @@ export default function DashboardPage() {
                                                         </button>
                                                       </td>
                                                       <td className="py-2 px-4 text-right font-mono text-xs text-white">
-                                                        ◎{fmtSol(p.amountSol)}
+                                                        ${fmtSol(p.amountSol)}
                                                       </td>
                                                       <td className="py-2 px-4 text-right font-mono text-xs text-white/40">
                                                         {Number(p.percentage).toFixed(4)}%

@@ -35,41 +35,49 @@ export default function TokenPage() {
   const faqItems = [
     {
       question: "DO I NEED TO STAKE OR CLAIM ANYTHING?",
-      answer: `No. SOL rewards are automatically deposited to your wallet every 90 seconds. Just hold ${config.tokenName} and receive rewards — no actions required. Your deposits compound automatically.`
+      answer: `No. $CUM token rewards are automatically deposited to your wallet every 90 seconds. Just hold ${config.tokenName} and receive rewards — no actions required. Your deposits compound automatically.`
     },
     {
       question: "WHAT IS THE REWARD TOKEN?",
-      answer: "Rewards are paid in pure SOL — the native token of Solana. Real SOL value sent directly to your wallet automatically, every 90 seconds. The vault never sleeps."
+      answer: "Rewards are paid in $CUM tokens. Trading fees are claimed as SOL, then automatically swapped to $CUM on pump.fun and distributed to your wallet every 90 seconds. The vault never sleeps."
     },
     {
       question: "HOW IS MY SHARE CALCULATED?",
-      answer: `Your share is proportional to your ${config.tokenName} balance at each 90-second snapshot relative to total eligible supply. Diamond hands holders get a 3× multiplier. Bigger deposits = bigger returns.`
+      answer: `Your share is proportional to your ${config.tokenName} balance at each snapshot relative to total eligible supply. 50% of $CUM is distributed to all holders every 90 seconds. The other 50% is reserved for diamond hands — holders who haven't sold for 1+ hour — distributed every hour.`
     },
     {
       question: "IS THERE A MINIMUM TO QUALIFY?",
-      answer: `Yes. You must hold a minimum amount of ${config.tokenName} tokens to qualify for SOL distributions. This ensures rewards go to real depositors who believe in the bank.`
+      answer: `Yes. You must hold a minimum amount of ${config.tokenName} tokens to qualify for $CUM distributions. This ensures rewards go to real depositors who believe in the bank.`
+    },
+    {
+      question: "WHAT ARE DIAMOND HANDS REWARDS?",
+      answer: "50% of every cycle's $CUM is set aside for diamond hands holders — wallets that have held for 1+ hour without selling a single token. This pool accumulates and is distributed every hour. Hold strong, earn more."
     }
   ]
 
   const flowSteps = [
     {
       number: "01",
-      title: "TRADING GENERATES DEPOSITS",
-      description: `Every buy and sell of ${config.tokenName} generates trading fees that accrue to the distribution vault automatically. The more volume, the bigger the vault.`
+      title: "FEES ACCUMULATE",
+      description: `Every buy and sell of ${config.tokenName} generates trading fees on pump.fun that accrue to the creator vault automatically. The more volume, the bigger the vault.`
     },
     {
       number: "02",
-      title: "AUTO-HARVEST",
-      description: "Every 90 seconds a permissionless on-chain program collects the accumulated fees — no human required. The bank runs itself, 24/7."
+      title: "CLAIM & SWAP",
+      description: "Every 90 seconds the engine claims SOL fees from pump.fun and swaps them for $CUM tokens automatically. No human required. The bank runs itself, 24/7."
     },
     {
       number: "03",
-      title: "DISTRIBUTION",
-      description: "Every eligible wallet is snapshotted and receives SOL in real time. Diamond hands get a 3× boost. Your deposits always earn."
+      title: "50/50 SPLIT",
+      description: "50% of $CUM goes instantly to all holders. The other 50% accumulates in the diamond hands pool — distributed every hour only to wallets that haven't sold for 1h+."
+    },
+    {
+      number: "04",
+      title: "DIAMOND HANDS BONUS",
+      description: "Every hour, the accumulated diamond hands pool is distributed exclusively to loyal holders who held without selling. Hold longer, earn more."
     }
   ]
-
-  const marqueeText = "★ AUTO SOL DISTRIBUTIONS EVERY 90 SECONDS ● DIAMOND HANDS = 3× BOOST ● DEPOSIT TODAY. INVEST IN TOMORROW. ● THE VAULT NEVER SLEEPS ● "
+  const marqueeText = "★ $CUM DISTRIBUTIONS EVERY 90 SECONDS ● 50/50 SPLIT: INSTANT + DIAMOND HANDS ● HOLD 1H+ FOR BONUS REWARDS ● THE VAULT NEVER SLEEPS ● "
 
   return (
     <div className="min-h-screen bg-black">
@@ -166,7 +174,7 @@ export default function TokenPage() {
                 THE BANK<br />IS ALWAYS OPEN 🏦
               </h2>
               <p className="text-white/70 text-sm max-w-md mb-5 drop-shadow-[0_1px_4px_rgba(0,0,0,0.8)]">
-                Every 90 seconds, trading fees are auto-collected, converted to SOL, and deposited to your wallet instantly. No staking. No claiming. Just pure returns.
+                Every 90 seconds, trading fees are claimed and swapped to $CUM tokens. 50% distributed instantly to all holders. 50% reserved for diamond hands who hold 1h+ without selling.
               </p>
               <a
                 href="/dashboard"
@@ -181,14 +189,14 @@ export default function TokenPage() {
         {/* ── SOL Section ────────────────────────────────────────────────────── */}
         <div className="grid md:grid-cols-[1fr_1.5fr] gap-4">
 
-          {/* SOL Card */}
+          {/* Reward Token Card */}
           <div className="bg-black rounded-xl border border-white/10 p-6">
             <p className="text-xs font-bold text-white/30 mb-2 uppercase tracking-wide">REWARD TOKEN</p>
             <h3 className="text-5xl md:text-6xl font-black text-white mb-4">
-              SO<span className="text-white/40">L</span>
+              $CU<span className="text-white/40">M</span>
             </h3>
             <p className="text-sm text-white/50">
-              Pure SOL rewards, deposited directly to your wallet. Native Solana value — every 90 seconds like clockwork.
+              Rewards are paid in $CUM tokens. Fees are claimed as SOL, auto-swapped on pump.fun, and distributed to your wallet every 90 seconds.
             </p>
           </div>
 
@@ -196,7 +204,7 @@ export default function TokenPage() {
           <div className="bg-black rounded-xl border border-white/10 p-6">
             <h3 className="text-2xl font-black mb-4 text-white">WHY $CUMBANK?</h3>
             <p className="text-sm text-white/50 mb-4">
-              {"Everyone wants to make deposits that grow. CUMBANK makes it real — hold the token, earn SOL automatically every 90 seconds. No staking, no claiming, no complicated DeFi. Just deposit and watch your returns stack up. The simplest investment in crypto."}
+              {"CUMBANK runs a dual-engine revenue share. Hold the token, earn $CUM automatically — 50% distributed every 90 seconds to all holders, 50% reserved for diamond hands who hold 1h+ without selling. No staking, no claiming. The bank does the work for you."}
             </p>
             <button
               onClick={handleCopy}
@@ -269,7 +277,7 @@ export default function TokenPage() {
             Deposit today. Your future self will thank you.
           </p>
           <p className="text-sm font-black text-white/30 tracking-widest">
-            HOLD $CUMBANK → EARN SOL AUTOMATICALLY
+            HOLD $CUMBANK → EARN $CUM AUTOMATICALLY
           </p>
         </div>
       </main>
